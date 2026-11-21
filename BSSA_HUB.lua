@@ -3151,4 +3151,4 @@ Env.FarmCleanup = cleanup
 
 setStatus("Ready")
 
-print("[BSSA HUB] V" .. HUB_VERSION .. " | " .. HUB_BUILD .. " | LOADED")
+print("[BSSA HUB] V" .. HUB_VERSION .. " | LOADED")
