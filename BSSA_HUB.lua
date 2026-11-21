@@ -1,192 +1,128 @@
+-- Dragging
 
-    DigInterval = 0.1,
-    AntiAFKInterval = 300,
-    WatermelonInterval = 0.1,
-    SproutInterval = 0.1,
-    MobHiveWait = 1,
+local dragging = false
+local dragStart
+local startPosition
 
-    WindowWidth = 620,
-    WindowHeight = 365
-}
+connect(header.InputBegan, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
 
-local State = {
-    active = true,
-    farm = false,
-    sprout = false,
-    convert = false,
-    dig = false,
-    busy = false,
-    mobFarm = false,
-    autoWatermelon = false,
-    autoSprout = false,
+        dragging = true
+        dragStart = input.Position
+        startPosition = main.Position
 
-    field = nil,
-    fieldName = nil,
-
-    sproutField = nil,
-    sproutFieldName = nil,
-
-    hive = nil,
-    hiveProxy = nil,
-
-    status = "Ready"
-}
-
-local Connections = {}
-local cleanup
-
-local function connect(signal, callback)
-    local connection = signal:Connect(callback)
-    Connections[#Connections + 1] = connection
-    return connection
-end
-
-local function getRoot()
-    local character = Player.Character
-    return character and character:FindFirstChild("HumanoidRootPart")
-end
-
-local function getStandOffset()
-    local character = Player.Character
-    local root = getRoot()
-    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-    if root and humanoid then
-        return humanoid.HipHeight + root.Size.Y * 0.5 + 0.05
-    end
-
-    return 2.65
-end
-
-local function teleport(cf)
-    local root = getRoot()
-    if not root or not cf then return false end
-
-    root.CFrame = cf
-    root.AssemblyLinearVelocity = Vector3.zero
-    return true
-end
-
-local function distanceSquared(a, b)
-    local delta = a - b
-    return delta:Dot(delta)
-end
-
-local function currentAnchor()
-    if State.mobFarm then return nil end
-    if State.sprout then return State.sproutField end
-    if State.farm then return State.field end
-    return nil
-end
-
-local setStatus = function(message)
-    State.status = message
-end
-
--- ============================================================
--- PART 2: WORLD DISCOVERY
--- ============================================================
-
-local FIELD_ORDER = {
-    ["Mushroom Field"] = 1,
-    ["Blueberry Field"] = 2,
-    ["Clover Field"] = 3,
-    ["Spider Field"] = 4,
-    ["Pineapple Field"] = 5,
-    ["Mountain Field"] = 6,
-    ["Forest Field"] = 7,
-    ["Strawberry Field"] = 8,
-    ["Watermelon Field"] = 9,
-    ["Banana Field"] = 10,
-    ["Cog Field"] = 11
-}
-
-local BEAR_ORDER = {
-    ["Black Bear"] = 1,
-    ["Mother Bear"] = 2,
-    ["Panda Bear"] = 3,
-    ["Science Bear"] = 4,
-    ["Dapper Bear"] = 5,
-    ["Polar Bear"] = 6,
-    ["Flame Bear"] = 7,
-    ["Shy Bear"] = 8,
-    ["Beach Bear"] = 9,
-    ["Robo Bear"] = 10,
-    ["The Bear From Your Dreams"] = 11,
-    ["Secret Bear"] = 12
-}
-
-local function sortLocations(list, order)
-    table.sort(list, function(a, b)
-        local x = order[a[1]] or 999
-        local y = order[b[1]] or 999
-
-        if x ~= y then return x < y end
-        return a[1] < b[1]
-    end)
-
-    return list
-end
-
-local function getPlatformCF(platform)
-    if not platform then return nil end
-
-    local cf, size
-
-    if platform:IsA("BasePart") then
-        cf = platform.CFrame
-        size = platform.Size
-    elseif platform:IsA("Model") then
-        cf, size = platform:GetBoundingBox()
-    else
-        return nil
-    end
-
-    return CFrame.new(
-        cf.Position.X,
-        cf.Position.Y + size.Y * 0.5 + getStandOffset(),
-        cf.Position.Z
-    )
-end
-
-local function getHiveCF()
-    local folder = Workspace:FindFirstChild("Hives")
-    if not folder then return State.hive end
-
-    local displayCandidate
-    local displayPrompt
-
-    for _, hive in ipairs(folder:GetChildren()) do
-        local exact = false
-        local display = false
-
-        local claimed = hive:FindFirstChild("Claimed")
-
-        if claimed and claimed:IsA("ValueBase") then
-            exact = claimed.Value == Player
-                or tostring(claimed.Value) == Player.Name
-
-            display = tostring(claimed.Value) == Player.DisplayName
-        end
-
-        if not exact then
-            for _, obj in ipairs(hive:GetDescendants()) do
-                if obj:IsA("ObjectValue") and obj.Value == Player then
-                    exact = true
-                    break
-                elseif obj:IsA("StringValue") then
-                    if obj.Value == Player.Name then
-                        exact = true
-                        break
-                    elseif obj.Value == Player.DisplayName then
-                        display = true
-                    end
-                elseif obj:IsA("TextLabel") then
-                    if obj.Text:find(Player.Name, 1, true) then
-                        exact = true
-                        break
-                    elseif obj.Text:find(Player.DisplayName, 1, true) then
-                        display = true
-                    end
-                end
+        local release
+        release = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+                release:Disconnect()
             end
+        end)
+    end
+end)
+
+connect(UIS.InputChanged, function(input)
+    if not dragging or not dragStart or not startPosition then
+        return
+    end
+
+    if input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch then
+
+        local delta = input.Position - dragStart
+
+        main.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- Fast, modern window transition: no cinematic overlays or temporary GUI.
+-- UIScale scales the entire interface together, preventing stray fixed-size rows.
+local alive = true
+local windowScale = Instance.new('UIScale')
+windowScale.Scale = 1
+windowScale.Parent = main
+local uiOpen = true
+local animationTween = nil
+local function setWindowOpen(open, instant)
+    uiOpen = open
+    if animationTween then animationTween:Cancel(); animationTween = nil end
+    if not alive then return end
+    if instant then
+        windowScale.Scale = open and 1 or .965
+        main.Visible = open
+        return
+    end
+    if open then
+        windowScale.Scale = .965
+        main.Visible = true
+    end
+    local tween = TweenService:Create(windowScale,
+        TweenInfo.new(open and .12 or .095, Enum.EasingStyle.Quart,
+            open and Enum.EasingDirection.Out or Enum.EasingDirection.In),
+        {Scale = open and 1 or .965})
+    animationTween = tween
+    tween:Play()
+    local thisTween = tween
+    task.spawn(function()
+        thisTween.Completed:Wait()
+        if animationTween ~= thisTween or not alive then return end
+        animationTween = nil
+        main.Visible = uiOpen
+    end)
+end
+connect(UIS.InputBegan, function(input, processed)
+    if processed or input.KeyCode ~= Enum.KeyCode.RightControl then return end
+    setWindowOpen(not uiOpen, false)
+end)
+-- Initial reveal is quick and clean.
+setWindowOpen(true, false)
+
+-- Cleanup
+
+local cleaned = false
+
+cleanup = function()
+    if cleaned then return end
+    cleaned = true
+    alive = false
+
+    State.active = false
+    State.farm = false
+    State.sprout = false
+    State.mobFarm = false
+    mobAbortTarget()
+    State.convert = false
+    State.dig = false
+    State.autoWatermelon = false
+    State.autoSprout = false
+    jellyHalt()
+    for _,c in ipairs(jellyOptionConnections) do pcall(function() c:Disconnect() end) end
+    State.busy = false
+
+    for _, connection in ipairs(Connections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+
+    table.clear(Connections)
+    table.clear(tokenIndex)
+    table.clear(tokenAttempts)
+    table.clear(tokenCooldowns)
+    table.clear(tokenPending)
+
+    if gui and gui.Parent then
+        gui:Destroy()
+    end
+end
+
+Env.FarmCleanup = cleanup
+
+setStatus("Ready")
+
