@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.26"
-local HUB_BUILD = "Gumdrop Toggle"
+local HUB_VERSION = "2.2.27"
+local HUB_BUILD = "Auto Planters"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -84,6 +84,10 @@ local State = {
     autoWatermelon = false,
     autoSprout = false,
     autoGumdrop = false,
+    planterEnabled = false,
+    planterBusy = false,
+    planterThread = nil,
+    planterItem = nil,
 
     field = nil,
     fieldName = nil,
@@ -124,6 +128,9 @@ local function getStandOffset()
 end
 
 local function teleport(cf)
+    if State.planterBusy and State.planterThread ~= coroutine.running() then
+        return false
+    end
     local root = getRoot()
     if not root or not cf then return false end
 
@@ -1352,6 +1359,7 @@ local function farmStep()
         RunService.Heartbeat:Wait()
     end
 
+    if State.busy or State.mobFarm then return end
     if handleClouds() then return end
     if handleHoneyMark() then return end
     if collectTokens(anchor) then return end
@@ -1695,8 +1703,8 @@ end
 local homePage = addTab("Home", 1)
 local farmPage = addTab("Farming", 2)
 local mobPage = addTab("Mob Farm", 3)
-local tpPage = addTab("Teleports", 4)
-local miscPage = addTab("Misc", 5)
+local tpPage = addTab("Teleports", 5)
+local miscPage = addTab("Misc", 6)
 
 switchTab("Home")
 
@@ -2046,7 +2054,7 @@ end)
 
 task.spawn(function()
     while State.active do
-        if State.autoGumdrop then
+        if State.autoGumdrop and not State.planterBusy then
             local fields = Workspace:FindFirstChild("Fields")
             local name = State.sprout and State.sproutFieldName or State.fieldName or "Spider Field"
             local field = fields and fields:FindFirstChild(name)
@@ -2221,6 +2229,364 @@ task.spawn(function()
 end)
 
 -- ============================================================
+-- AUTO PLANTERS: independent background controller
+-- ============================================================
+do
+    local planters = {
+        {name="Paper Planter", field="Blueberry Field", wax="Hard Wax", duration=1800},
+        {name="Plastic Planter", field="Pineapple Field", wax="Swirled Wax", duration=3600}
+    }
+    local inventory, inventoryAt = nil, -math.huge
+    local retrySeconds = 20
+    local collectionSeconds = 10
+    local collectionRadiusSq = 35 * 35
+    local function planterValue(model, name)
+        local obj = model:FindFirstChild(name)
+        if obj and obj:IsA("ValueBase") then return obj.Value end
+        return nil
+    end
+    local function ownerStatus(model)
+        local owner = planterValue(model, "Player")
+        if owner == nil or owner == "" then return nil end
+        if typeof(owner) == "Instance" then
+            if not owner:IsA("Player") then return nil end
+            return owner == Player
+        end
+        if type(owner) == "number" then
+            if owner <= 0 then return nil end
+            return owner == Player.UserId
+        end
+        if type(owner) == "string" then return owner == Player.Name end
+        return nil
+    end
+    local function scanPlanter(item)
+        local folder = Workspace:FindFirstChild("Planters")
+        if not folder then return nil, "Waiting for planters" end
+        local own, occupied, uncertain = nil, false, false
+        for _, model in ipairs(folder:GetChildren()) do
+            local owner = ownerStatus(model)
+            if owner == true then
+                local field = planterValue(model, "Field")
+                if model.Name == item.name then
+                    if own then return nil, "Multiple matching planters" end
+                    own = model
+                elseif field == item.field then
+                    occupied = true
+                elseif field == nil or field == "" then
+                    uncertain = true
+                end
+            elseif owner == nil and model.Name == item.name then
+                uncertain = true
+            end
+        end
+        if own then
+            local field = planterValue(own, "Field")
+            if type(field) ~= "string" or field == "" then
+                return own, "Checking field"
+            end
+            if field ~= item.field then
+                return own, "Planter is placed in another field"
+            end
+            local level = tonumber(planterValue(own, "Level"))
+            if not level or level < 0 or level > 100 then
+                return own, "Checking growth"
+            end
+            if level == 100 then return own, "Ready to harvest", level end
+            return own, "Growing", level
+        end
+        if uncertain then return nil, "Checking planter ownership" end
+        if occupied then return nil, "Field occupied" end
+        return nil, "Not planted"
+    end
+    local function inventoryAmount(name)
+        -- A missing item in a valid inventory means no stock. An unavailable
+        -- inventory is unknown, not zero, and must not initiate placement.
+        if not inventory or os.clock() - inventoryAt > 15 then return nil end
+        local value = inventory[name]
+        if value == nil then return 0 end
+        local amount = tonumber(value)
+        return amount and math.max(0, amount) or nil
+    end
+    task.spawn(function()
+        while State.active do
+            if State.planterEnabled then
+                local remotes = RS:FindFirstChild("Remotes")
+                local remote = remotes and remotes:FindFirstChild("GetData")
+                if remote and remote:IsA("RemoteFunction") then
+                    local ok, data = pcall(function() return remote:InvokeServer() end)
+                    if State.active and ok and type(data) == "table"
+                        and type(data.Inventory) == "table" then
+                        inventory, inventoryAt = data.Inventory, os.clock()
+                    end
+                end
+            end
+            task.wait(3)
+        end
+    end)
+    local function waitFor(seconds, predicate)
+        local deadline = os.clock() + seconds
+        repeat
+            if not State.active or not getRoot() then return false end
+            if predicate() then return true end
+            task.wait(0.1)
+        until os.clock() >= deadline
+        return State.active and getRoot() ~= nil and predicate() or false
+    end
+    local function planterSoil(model)
+        local soil = model and model:FindFirstChild("Soil")
+        if soil and soil:IsA("BasePart") then return soil end
+        return soil and soil:FindFirstChildWhichIsA("BasePart", true) or nil
+    end
+    local function collectRewards(origin, previousTokens)
+        local deadline = os.clock() + collectionSeconds
+        local retryAt = {}
+        while State.active and getRoot() and os.clock() < deadline do
+            local best, bestVisual, nearest
+            local root = getRoot()
+            if not root then break end
+            for _, token in ipairs(Tokens:GetChildren()) do
+                -- Only freshly spawned, player-specific tokens near the harvested
+                -- planter. Do not use the autofarm's item exclusion filter here.
+                if token.Name == Player.Name and not previousTokens[token] then
+                    local hb, visual = tokenParts(token)
+                    if tokenAlive(hb, visual)
+                        and distanceSquared(hb.Position, origin) <= collectionRadiusSq
+                        and (retryAt[hb] or 0) <= os.clock() then
+                        local distance = distanceSquared(hb.Position, root.Position)
+                        if not nearest or distance < nearest then
+                            best, bestVisual, nearest = hb, visual, distance
+                        end
+                    end
+                end
+            end
+            if best then
+                local untilTime = math.min(deadline, os.clock() + CFG.TokenStay)
+                repeat
+                    if not State.active or not getRoot() or not tokenAlive(best, bestVisual) then break end
+                    if not teleport(best.CFrame) then break end
+                    touchToken(best)
+                    RunService.Heartbeat:Wait()
+                until os.clock() >= untilTime
+                retryAt[best] = os.clock() + 0.35
+            else
+                task.wait(0.08)
+            end
+        end
+    end
+    local function place(item)
+        if not item.enabled or not State.active or not getRoot() then return end
+        local _, status = scanPlanter(item)
+        if status ~= "Not planted" then return end
+        local amount = inventoryAmount(item.name)
+        if amount == nil then item.status = "Checking inventory" return end
+        if amount <= 0 then item.status = "Out of planters" return end
+        local fields = Workspace:FindFirstChild("Fields")
+        local field = fields and fields:FindFirstChild(item.field)
+        local box = field and field:FindFirstChild("FieldBox")
+        local cf
+        for _, entry in ipairs(buildFields()) do
+            if entry[1] == item.field then cf = entry[2] break end
+        end
+        local remotes = RS:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("UseItem")
+        if not cf or not box or not remote or not remote:IsA("RemoteEvent") then
+            item.status, item.retryAt = "Placement unavailable", os.clock() + retrySeconds
+            return
+        end
+        item.status = "Planting"
+        setStatus("Planters: Planting " .. item.name)
+        if not teleport(cf) then return end
+        task.wait(0.25)
+        if not State.active or not item.enabled or not getRoot() then return end
+        local _, checkStatus = scanPlanter(item)
+        if checkStatus ~= "Not planted" then return end
+        local root = getRoot()
+        if not root or distanceSquared(root.Position, cf.Position) > 100 then
+            item.status, item.retryAt = "Placement position changed", os.clock() + retrySeconds
+            return
+        end
+        local sent = pcall(function() remote:FireServer(item.name, box) end)
+        if sent and waitFor(4, function()
+            local model, currentStatus = scanPlanter(item)
+            return model ~= nil and currentStatus ~= "Planter is placed in another field"
+        end) then
+            item.status, item.retryAt = "Planted", 0
+        else
+            item.status, item.retryAt = "Placement failed - retry later", os.clock() + retrySeconds
+        end
+    end
+    local function harvest(item, model)
+        if not item.enabled or not State.active or not getRoot() then return end
+        local soil = planterSoil(model)
+        local remotes = RS:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("ClaimPlanter")
+        if not soil or not remote or not remote:IsA("RemoteEvent") then
+            item.status, item.retryAt = "Harvest unavailable", os.clock() + retrySeconds
+            return
+        end
+        local origin = soil.Position
+        local cf = CFrame.new(origin.X, origin.Y + soil.Size.Y * 0.5 + getStandOffset(), origin.Z)
+        item.status = "Harvesting"
+        setStatus("Planters: Harvesting " .. item.name)
+        if not teleport(cf) then return end
+        task.wait(0.25)
+        if not State.active or not item.enabled or not getRoot() then return end
+        -- Revalidate identity, exact field and exact 100% immediately before
+        -- sending the claim. No fixed timer is ever allowed to trigger it.
+        local current, status, level = scanPlanter(item)
+        if current ~= model or status ~= "Ready to harvest" or level ~= 100 then return end
+        if not soil.Parent then return end
+        local root = getRoot()
+        if not root or distanceSquared(root.Position, cf.Position) > 100 then
+            item.status, item.retryAt = "Harvest position changed", os.clock() + retrySeconds
+            return
+        end
+        local previousTokens = {}
+        for _, token in ipairs(Tokens:GetChildren()) do previousTokens[token] = true end
+        local sent = pcall(function() remote:FireServer(item.name) end)
+        if not sent or not waitFor(4, function()
+            return not model:IsDescendantOf(Workspace)
+        end) then
+            item.status, item.retryAt = "Harvest not confirmed", os.clock() + retrySeconds
+            return
+        end
+        item.harvested += 1
+        item.status = "Collecting rewards"
+        setStatus("Planters: Collecting " .. item.name .. " rewards")
+        collectRewards(origin, previousTokens)
+        -- Complete an already-confirmed harvest even if its toggle was turned
+        -- off mid-collection, but don't place another planter if disabled.
+        if State.active and item.enabled and getRoot() then place(item) end
+    end
+    local page = addTab("Planters", 4)
+    local left, right = makeColumns(page)
+    for index, item in ipairs(planters) do
+        local panel = index == 1 and left or right
+        item.enabled, item.harvested, item.retryAt = false, 0, 0
+        item.status = "Disabled"
+        heading(panel, item.name:upper(), 1)
+        infoRow(panel, item.field, 2)
+        makeToggle(panel, "Auto " .. item.name, 3, function(value)
+            item.enabled = value
+            item.retryAt = 0
+            item.status = value and "Checking" or "Disabled"
+            State.planterEnabled = planters[1].enabled or planters[2].enabled or false
+        end)
+        item.growthLabel = infoRow(panel, "Growth: --", 4)
+        item.stockLabel = infoRow(panel, "Inventory: --", 5)
+        item.harvestLabel = infoRow(panel, "Harvested: 0", 6)
+        item.waxLabel = infoRow(panel, item.wax .. ": --", 7)
+        item.statusLabel = infoRow(panel, "Disabled", 8)
+        item.statusLabel.TextWrapped = true
+        item.statusLabel.TextSize = 11
+    end
+    local function eligible(item)
+        if not item.enabled or os.clock() < item.retryAt then return false end
+        local model, status = scanPlanter(item)
+        if status == "Ready to harvest" then return true, model end
+        if status == "Not planted" and (inventoryAmount(item.name) or 0) > 0 then return true end
+        return false
+    end
+    task.spawn(function()
+        while State.active do
+            task.wait(0.25)
+            if not State.active then break end
+            for _, item in ipairs(planters) do
+                local _, status, level = scanPlanter(item)
+                local amount, wax = inventoryAmount(item.name), inventoryAmount(item.wax)
+                item.stockLabel.Text = "Inventory: " .. (amount ~= nil and tostring(amount) or "--")
+                item.waxLabel.Text = item.wax .. ": " .. (wax ~= nil and tostring(wax) or "--")
+                item.harvestLabel.Text = "Harvested: " .. item.harvested
+                if level ~= nil then
+                    local seconds = math.ceil((100-level)/100*item.duration)
+                    item.growthLabel.Text = string.format("%.1f%% | ~%02d:%02d", level, math.floor(seconds/60), seconds%60)
+                else
+                    item.growthLabel.Text = "Growth: --"
+                end
+                if State.planterItem ~= item then
+                    if not item.enabled then item.status = "Disabled"
+                    elseif os.clock() >= item.retryAt then
+                        if status == "Not planted" then
+                            if amount == nil then status = "Checking inventory"
+                            elseif amount <= 0 then status = "Out of planters" end
+                        end
+                        if status == "Ready to harvest" and State.busy and not State.planterBusy then
+                            status = "Waiting for conversion"
+                        end
+                        item.status = status
+                    end
+                end
+                item.statusLabel.Text = item.status
+            end
+        end
+    end)
+    -- One worker owns movement throughout a planter batch. Existing conversion
+    -- keeps its lock until it finishes. An active mob visit is cancelled without
+    -- disabling its toggle; its normal controller will select again afterward.
+    task.spawn(function()
+        while State.active do
+            task.wait(0.2)
+            if State.active and State.planterEnabled and not State.busy and getRoot() then
+                local due = false
+                for _, item in ipairs(planters) do
+                    if eligible(item) then due = true break end
+                end
+                if due then
+                    State.planterBusy = true
+                    State.planterThread = coroutine.running()
+                    State.busy = true
+                    if State.mobFarm then mobAbortTarget() end
+                    -- Re-read all state under the lock. Prioritize fully grown
+                    -- planters, then fill missing slots, at most once per batch.
+                    local processed = {}
+                    local ok, err = pcall(function()
+                        for pass = 1, 2 do
+                            for _, item in ipairs(planters) do
+                                if not State.active or not getRoot() then return end
+                                local yes, model = eligible(item)
+                                if yes and not processed[item] and ((pass == 1 and model ~= nil) or (pass == 2 and model == nil)) then
+                                    processed[item] = true
+                                    State.planterItem = item
+                                    local success, failure = pcall(function()
+                                        if model then harvest(item, model) else place(item) end
+                                    end)
+                                    if not success then
+                                        item.status, item.retryAt = "Planter action failed - retry later", os.clock() + retrySeconds
+                                        warn("[BSSA] Planter action:", failure)
+                                    end
+                                    State.planterItem = nil
+                                end
+                            end
+                        end
+                    end)
+                    -- Release the lock even if an action raises an error. Do
+                    -- not restore a stale farm selection after a user changes it.
+                    if not ok then warn("[BSSA] Planters:", err) end
+                    State.planterItem = nil
+                    if State.active then
+                        pcall(function()
+                            resetTokenTracking()
+                            resetFarmTargets()
+                            local anchor = currentAnchor()
+                            if anchor then teleport(anchor) end
+                        end)
+                    end
+                    State.planterThread = nil
+                    State.planterBusy = false
+                    State.busy = false
+                    if State.active then
+                        if State.farm then setStatus("Farming " .. tostring(State.fieldName))
+                        elseif State.mobFarm then setStatus("Mob Farm: Resuming")
+                        elseif State.sprout then setStatus("Sprout farming")
+                        else setStatus("Ready") end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- ============================================================
 -- PART 8: HOME, TELEPORTS, STATISTICS & CLEANUP
 -- ============================================================
 
@@ -2348,14 +2714,14 @@ end)
 
 task.spawn(function()
     while State.active do
-        if State.autoWatermelon then
+        if State.autoWatermelon and not State.planterBusy then
             local firstBox = getStandingWatermelonField()
             if firstBox then
                 -- Confirm we're still in the same field after a brief settling
                 -- period, so switching fields cannot use the previous target.
                 task.wait()
                 local currentBox = getStandingWatermelonField()
-                if State.active and State.autoWatermelon
+                if State.active and State.autoWatermelon and not State.planterBusy
                     and currentBox == firstBox and currentBox.Parent then
                     local remotes = RS:FindFirstChild("Remotes")
                     local useItem = remotes and remotes:FindFirstChild("UseItem")
@@ -2380,12 +2746,12 @@ end)
 
 task.spawn(function()
     while State.active do
-        if State.autoSprout then
+        if State.autoSprout and not State.planterBusy then
             local firstBox = getStandingWatermelonField()
             if firstBox then
                 task.wait()
                 local currentBox = getStandingWatermelonField()
-                if State.active and State.autoSprout
+                if State.active and State.autoSprout and not State.planterBusy
                     and currentBox == firstBox and currentBox.Parent then
                     local remotes = RS:FindFirstChild("Remotes")
                     local useItem = remotes and remotes:FindFirstChild("UseItem")
@@ -3062,7 +3428,9 @@ task.spawn(function()
             hphLabel.Text = "Honey / Hour: Off"
         end
 
-        if State.busy then
+        if State.planterBusy then
+            modeLabel.Text = "Mode: Planters"
+        elseif State.busy then
             modeLabel.Text = "Mode: Converting"
         elseif State.farm then
             modeLabel.Text = "Mode: Autofarm"
@@ -3070,6 +3438,8 @@ task.spawn(function()
             modeLabel.Text = "Mode: Sprout Farm"
         elseif State.mobFarm then
             modeLabel.Text = "Mode: Mob Farm"
+        elseif State.planterEnabled then
+            modeLabel.Text = "Mode: Planters (waiting)"
         else
             modeLabel.Text = "Mode: Idle"
         end
@@ -3180,6 +3550,10 @@ cleanup = function()
     State.autoWatermelon = false
     State.autoSprout = false
     State.autoGumdrop = false
+    State.planterEnabled = false
+    State.planterBusy = false
+    State.planterThread = nil
+    State.planterItem = nil
     jellyHalt()
     for _,c in ipairs(jellyOptionConnections) do pcall(function() c:Disconnect() end) end
     State.busy = false
