@@ -1,67 +1,3 @@
---[[
-    BSSA HUB
-    Roblox Luau
-
-    Release metadata is maintained in HUB_VERSION and HUB_BUILD below.
-]]
-
--- ============================================================
--- PART 1: SERVICES, CONFIGURATION & STATE
--- ============================================================
-
-local HUB_VERSION = "2.2.24"
-local HUB_BUILD = "Metadata Cleanup"
-
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local CoreGui = game:GetService("CoreGui")
-local UIS = game:GetService("UserInputService")
-local VIM = game:GetService("VirtualInputManager")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local RS = game:GetService("ReplicatedStorage")
-
-local Player = Players.LocalPlayer
-local Env = getgenv and getgenv() or {}
-
-if type(Env.FarmCleanup) == "function" then
-    pcall(Env.FarmCleanup)
-end
-
-local old = CoreGui:FindFirstChild("BSSAAutofarm")
-if old then old:Destroy() end
-
-local Debris = Workspace:WaitForChild("Debris")
-local Tokens = Debris:WaitForChild("Tokens")
-local Clouds = Workspace:WaitForChild("Clouds")
-
-local CFG = {
-    FieldRadius = 115,
-    ReturnRadius = 95,
-
-    TokenStay = 0.32,
-    TokenConfirmWait = 0.12,
-    -- Sprout mode: fast first attempt, longer retries only when needed.
-    SproutTokenStay = {0.10, 0.18, 0.32},
-    SproutTokenConfirm = {0.04, 0.08, 0.12},
-    TokenRetryDelay = 0.8,
-    TokenMaxAttempts = 3,
-    TokenBackoff = 5,
-    TokenReconcile = 2,
-
-    PollenInterval = 0.25,
-
-    MarkCooldown = 1,
-    MarkStay = 0.18,
-    MarkFirstDelay = 0.25,
-
-    CloudStay = 0.45,
-    CloudRetry = 1.5,
-
-    ConvertInterval = 0.5,
-    ConvertStuck = 15,
-    ConvertMaxRetries = 5,
-    ConvertCooldown = 15,
 
     DigInterval = 0.1,
     AntiAFKInterval = 300,
@@ -94,3 +30,163 @@ local State = {
     hiveProxy = nil,
 
     status = "Ready"
+}
+
+local Connections = {}
+local cleanup
+
+local function connect(signal, callback)
+    local connection = signal:Connect(callback)
+    Connections[#Connections + 1] = connection
+    return connection
+end
+
+local function getRoot()
+    local character = Player.Character
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getStandOffset()
+    local character = Player.Character
+    local root = getRoot()
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    if root and humanoid then
+        return humanoid.HipHeight + root.Size.Y * 0.5 + 0.05
+    end
+
+    return 2.65
+end
+
+local function teleport(cf)
+    local root = getRoot()
+    if not root or not cf then return false end
+
+    root.CFrame = cf
+    root.AssemblyLinearVelocity = Vector3.zero
+    return true
+end
+
+local function distanceSquared(a, b)
+    local delta = a - b
+    return delta:Dot(delta)
+end
+
+local function currentAnchor()
+    if State.mobFarm then return nil end
+    if State.sprout then return State.sproutField end
+    if State.farm then return State.field end
+    return nil
+end
+
+local setStatus = function(message)
+    State.status = message
+end
+
+-- ============================================================
+-- PART 2: WORLD DISCOVERY
+-- ============================================================
+
+local FIELD_ORDER = {
+    ["Mushroom Field"] = 1,
+    ["Blueberry Field"] = 2,
+    ["Clover Field"] = 3,
+    ["Spider Field"] = 4,
+    ["Pineapple Field"] = 5,
+    ["Mountain Field"] = 6,
+    ["Forest Field"] = 7,
+    ["Strawberry Field"] = 8,
+    ["Watermelon Field"] = 9,
+    ["Banana Field"] = 10,
+    ["Cog Field"] = 11
+}
+
+local BEAR_ORDER = {
+    ["Black Bear"] = 1,
+    ["Mother Bear"] = 2,
+    ["Panda Bear"] = 3,
+    ["Science Bear"] = 4,
+    ["Dapper Bear"] = 5,
+    ["Polar Bear"] = 6,
+    ["Flame Bear"] = 7,
+    ["Shy Bear"] = 8,
+    ["Beach Bear"] = 9,
+    ["Robo Bear"] = 10,
+    ["The Bear From Your Dreams"] = 11,
+    ["Secret Bear"] = 12
+}
+
+local function sortLocations(list, order)
+    table.sort(list, function(a, b)
+        local x = order[a[1]] or 999
+        local y = order[b[1]] or 999
+
+        if x ~= y then return x < y end
+        return a[1] < b[1]
+    end)
+
+    return list
+end
+
+local function getPlatformCF(platform)
+    if not platform then return nil end
+
+    local cf, size
+
+    if platform:IsA("BasePart") then
+        cf = platform.CFrame
+        size = platform.Size
+    elseif platform:IsA("Model") then
+        cf, size = platform:GetBoundingBox()
+    else
+        return nil
+    end
+
+    return CFrame.new(
+        cf.Position.X,
+        cf.Position.Y + size.Y * 0.5 + getStandOffset(),
+        cf.Position.Z
+    )
+end
+
+local function getHiveCF()
+    local folder = Workspace:FindFirstChild("Hives")
+    if not folder then return State.hive end
+
+    local displayCandidate
+    local displayPrompt
+
+    for _, hive in ipairs(folder:GetChildren()) do
+        local exact = false
+        local display = false
+
+        local claimed = hive:FindFirstChild("Claimed")
+
+        if claimed and claimed:IsA("ValueBase") then
+            exact = claimed.Value == Player
+                or tostring(claimed.Value) == Player.Name
+
+            display = tostring(claimed.Value) == Player.DisplayName
+        end
+
+        if not exact then
+            for _, obj in ipairs(hive:GetDescendants()) do
+                if obj:IsA("ObjectValue") and obj.Value == Player then
+                    exact = true
+                    break
+                elseif obj:IsA("StringValue") then
+                    if obj.Value == Player.Name then
+                        exact = true
+                        break
+                    elseif obj.Value == Player.DisplayName then
+                        display = true
+                    end
+                elseif obj:IsA("TextLabel") then
+                    if obj.Text:find(Player.Name, 1, true) then
+                        exact = true
+                        break
+                    elseif obj.Text:find(Player.DisplayName, 1, true) then
+                        display = true
+                    end
+                end
+            end
