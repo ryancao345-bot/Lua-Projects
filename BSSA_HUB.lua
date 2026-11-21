@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.24"
-local HUB_BUILD = "Metadata Cleanup"
+local HUB_VERSION = "2.2.25"
+local HUB_BUILD = "Rolling Honey Statistics"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2938,12 +2938,53 @@ local sessionStart = os.clock()
 local previousHoney = getHoney()
 local earnedHoney = 0
 
+-- Honey/hour uses a rolling window instead of a lifetime average.
+-- This lets the estimate respond to a boost ending without becoming
+-- excessively noisy from individual honey updates.
+local HONEY_RATE_WINDOW = 300 -- 5 minutes
+local HONEY_STATS_INTERVAL = 0.1
+local honeyRateSamples = {}
+local honeyRateTotal = 0
 local farmStart
-local farmEarned = 0
+
+local function resetHoneyRate()
+    table.clear(honeyRateSamples)
+    honeyRateTotal = 0
+    farmStart = nil
+end
+
+local function addHoneyRateSample(now, amount)
+    if amount <= 0 then return end
+
+    honeyRateSamples[#honeyRateSamples + 1] = {
+        time = now,
+        amount = amount
+    }
+    honeyRateTotal = honeyRateTotal + amount
+end
+
+local function pruneHoneyRateSamples(now)
+    local cutoff = now - HONEY_RATE_WINDOW
+    local firstValid = 1
+
+    while firstValid <= #honeyRateSamples
+        and honeyRateSamples[firstValid].time < cutoff do
+        honeyRateTotal = honeyRateTotal - honeyRateSamples[firstValid].amount
+        firstValid = firstValid + 1
+    end
+
+    if firstValid > 1 then
+        local remaining = {}
+        for index = firstValid, #honeyRateSamples do
+            remaining[#remaining + 1] = honeyRateSamples[index]
+        end
+        honeyRateSamples = remaining
+    end
+end
 
 task.spawn(function()
     while State.active do
-        task.wait(0.25)
+        task.wait(HONEY_STATS_INTERVAL)
 
         local now = os.clock()
         local elapsed = math.floor(now - sessionStart)
@@ -2964,6 +3005,8 @@ task.spawn(function()
                 earnedHoney = earnedHoney + delta
             end
 
+            -- Spending lowers the balance but does not subtract from gross
+            -- honey earned. The next sample starts from the new balance.
             previousHoney = currentHoney
         end
 
@@ -2973,22 +3016,26 @@ task.spawn(function()
         if State.farm then
             if not farmStart then
                 farmStart = now
-                farmEarned = 0
+                table.clear(honeyRateSamples)
+                honeyRateTotal = 0
             end
 
-            farmEarned = farmEarned + delta
+            addHoneyRateSample(now, delta)
+            pruneHoneyRateSamples(now)
 
-            local duration = now - farmStart
+            local duration = math.min(now - farmStart, HONEY_RATE_WINDOW)
 
             if duration >= 10 then
+                local honeyPerHour = honeyRateTotal / duration * 3600
                 hphLabel.Text = "Honey / Hour: "
-                    .. formatNumber(farmEarned / duration * 3600)
+                    .. formatNumber(honeyPerHour)
             else
                 hphLabel.Text = "Honey / Hour: Calculating..."
             end
         else
-            farmStart = nil
-            farmEarned = 0
+            if farmStart then
+                resetHoneyRate()
+            end
             hphLabel.Text = "Honey / Hour: Off"
         end
 
