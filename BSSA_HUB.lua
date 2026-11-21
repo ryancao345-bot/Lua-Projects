@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.28"
-local HUB_BUILD = "Planter Countdown"
+local HUB_VERSION = "2.2.29"
+local HUB_BUILD = "Hive Conversion Counter"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -78,6 +78,7 @@ local State = {
     farm = false,
     sprout = false,
     convert = false,
+    hiveConversions = 0,
     dig = false,
     busy = false,
     mobFarm = false,
@@ -705,7 +706,10 @@ local function convertPollen()
     local failed = false
 
     local ok, err = pcall(function()
-        teleport(hive)
+        local arrived = teleport(hive)
+        if State.farm and arrived then
+            State.hiveConversions = State.hiveConversions + 1
+        end
         task.wait(0.45)
         triggerConversion()
 
@@ -2048,7 +2052,9 @@ end)
 
 local hphLabel = infoRow(farmLeft, "Honey / Hour: Off", 5)
 
-makeToggle(farmLeft, "Gumdrop Spam", 6, function(value)
+local conversionLabel = infoRow(farmLeft, "Hive Conversions: 0", 6)
+
+makeToggle(farmLeft, "Gumdrop Spam", 7, function(value)
     State.autoGumdrop = value
 end)
 
@@ -3472,6 +3478,8 @@ task.spawn(function()
             end
             hphLabel.Text = "Honey / Hour: Off"
         end
+
+        conversionLabel.Text = "Hive Conversions: " .. tostring(State.hiveConversions)
 
         if State.planterBusy then
             modeLabel.Text = "Mode: Planters"
