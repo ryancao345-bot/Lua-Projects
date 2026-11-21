@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.25"
-local HUB_BUILD = "Rolling Honey Statistics"
+local HUB_VERSION = "2.2.26"
+local HUB_BUILD = "Gumdrop Toggle"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -83,6 +83,7 @@ local State = {
     mobFarm = false,
     autoWatermelon = false,
     autoSprout = false,
+    autoGumdrop = false,
 
     field = nil,
     fieldName = nil,
@@ -2039,6 +2040,28 @@ end)
 
 local hphLabel = infoRow(farmLeft, "Honey / Hour: Off", 5)
 
+makeToggle(farmLeft, "Gumdrop Spam", 6, function(value)
+    State.autoGumdrop = value
+end)
+
+task.spawn(function()
+    while State.active do
+        if State.autoGumdrop then
+            local fields = Workspace:FindFirstChild("Fields")
+            local name = State.sprout and State.sproutFieldName or State.fieldName or "Spider Field"
+            local field = fields and fields:FindFirstChild(name)
+            local box = field and field:FindFirstChild("FieldBox")
+            local remotes = RS:FindFirstChild("Remotes")
+            local remote = remotes and remotes:FindFirstChild("UseItem")
+            if box and remote then
+                pcall(function() remote:FireServer("Gumdrops", box) end)
+            end
+        end
+        task.wait(0.25)
+    end
+end)
+
+
 heading(farmRight, "SPROUT FARM", 1)
 
 makeDropdown(
@@ -3156,6 +3179,7 @@ cleanup = function()
     State.dig = false
     State.autoWatermelon = false
     State.autoSprout = false
+    State.autoGumdrop = false
     jellyHalt()
     for _,c in ipairs(jellyOptionConnections) do pcall(function() c:Disconnect() end) end
     State.busy = false
