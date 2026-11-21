@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.27"
-local HUB_BUILD = "Auto Planters"
+local HUB_VERSION = "2.2.28"
+local HUB_BUILD = "Planter Countdown"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2298,6 +2298,56 @@ do
         if occupied then return nil, "Field occupied" end
         return nil, "Not planted"
     end
+    -- Display-only ETA: measure actual growth, then use a fixed deadline.
+    -- Never use this estimate to decide whether a planter is ready to harvest.
+    local function planterCountdown(item, model, level, now)
+        if not model then
+            item.eta = nil
+            return "Growth: --"
+        end
+        if level == nil then return "Growth: --" end
+        local eta = item.eta
+        if not eta or eta.model ~= model or level < eta.lastLevel then
+            eta = {model=model, lastLevel=level}
+            -- Reuse the measured rate from a previous cycle, if available.
+            if item.secondsPerPercent then
+                eta.deadline = now + (100-level)*item.secondsPerPercent
+            end
+            item.eta = eta
+        end
+        if level > eta.lastLevel then
+            if not eta.sampleAt then
+                -- Start at an observed level change, not an arbitrary fraction
+                -- of a growth step when the hub was opened.
+                eta.sampleAt, eta.sampleLevel = now, level
+            else
+                local gain = level - eta.sampleLevel
+                local elapsed = now - eta.sampleAt
+                if gain >= 2 and elapsed >= 10 then
+                    local rate = elapsed / gain
+                    item.secondsPerPercent = rate
+                    -- Calibrate only once per countdown. Later observations
+                    -- improve the estimate for the next planter, not this one.
+                    if not eta.deadline then
+                        eta.deadline = now + (100-level)*rate
+                    end
+                end
+            end
+            eta.lastLevel = level
+        end
+        if level >= 100 then
+            return string.format("%.1f%% | 00:00", level)
+        end
+        if not eta.deadline then
+            return string.format("%.1f%% | Calibrating", level)
+        end
+        local seconds = math.max(0, math.ceil(eta.deadline - now))
+        if seconds == 0 then
+            return string.format("%.1f%% | ETA overdue", level)
+        end
+        return string.format("%.1f%% | ~%02d:%02d", level,
+            math.floor(seconds/60), seconds%60)
+    end
     local function inventoryAmount(name)
         -- A missing item in a valid inventory means no stock. An unavailable
         -- inventory is unknown, not zero, and must not initiate placement.
@@ -2492,17 +2542,12 @@ do
             task.wait(0.25)
             if not State.active then break end
             for _, item in ipairs(planters) do
-                local _, status, level = scanPlanter(item)
+                local model, status, level = scanPlanter(item)
                 local amount, wax = inventoryAmount(item.name), inventoryAmount(item.wax)
                 item.stockLabel.Text = "Inventory: " .. (amount ~= nil and tostring(amount) or "--")
                 item.waxLabel.Text = item.wax .. ": " .. (wax ~= nil and tostring(wax) or "--")
                 item.harvestLabel.Text = "Harvested: " .. item.harvested
-                if level ~= nil then
-                    local seconds = math.ceil((100-level)/100*item.duration)
-                    item.growthLabel.Text = string.format("%.1f%% | ~%02d:%02d", level, math.floor(seconds/60), seconds%60)
-                else
-                    item.growthLabel.Text = "Growth: --"
-                end
+                item.growthLabel.Text = planterCountdown(item, model, level, os.clock())
                 if State.planterItem ~= item then
                     if not item.enabled then item.status = "Disabled"
                     elseif os.clock() >= item.retryAt then
