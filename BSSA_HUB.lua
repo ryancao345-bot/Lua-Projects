@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.29"
-local HUB_BUILD = "Hive Conversion Counter"
+local HUB_VERSION = "2.2.31"
+local HUB_BUILD = "Planter Harvest Safety Buffer"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2076,6 +2076,48 @@ task.spawn(function()
 end)
 
 
+-- Manual instant converter controls (local estimated cooldowns).
+do
+    heading(farmLeft, "INSTANT CONVERTERS", 8)
+    local converters = {
+        {name = "Instant Converter", label = "Converter 0"},
+        {name = "Instant Converter1", label = "Converter 1"},
+        {name = "Instant Converter2", label = "Converter 2"},
+        {name = "Instant Converter3", label = "Converter 3"},
+    }
+    local function refresh(item)
+        local remaining = math.max(0, math.ceil(item.readyAt - os.clock()))
+        item.button.Text = "  " .. item.label .. " | " .. (remaining > 0
+            and string.format("%d:%02d", math.floor(remaining / 60), remaining % 60)
+            or "Use (1 ticket)")
+        item.button.TextColor3 = remaining > 0 and THEME.Muted or THEME.Text
+    end
+    for i, item in ipairs(converters) do
+        item.readyAt = 0
+        item.button = makeButton(farmLeft, item.label, 8 + i, function()
+            if not State.active or os.clock() < item.readyAt then return end
+            local remotes = RS:FindFirstChild("Remotes")
+            local remote = remotes and remotes:FindFirstChild("UseMachine")
+            if not remote or not remote:IsA("RemoteEvent") then return end
+            local ok = pcall(function()
+                remote:FireServer(item.name, 0)
+            end)
+            if ok then
+                item.readyAt = os.clock() + 180
+                refresh(item)
+            end
+        end)
+        refresh(item)
+    end
+    infoRow(farmLeft, "Cooldowns: local estimates", 13)
+    task.spawn(function()
+        while State.active do
+            for _, item in ipairs(converters) do refresh(item) end
+            task.wait(0.25)
+        end
+    end)
+end
+
 heading(farmRight, "SPROUT FARM", 1)
 
 makeDropdown(
@@ -2245,6 +2287,7 @@ do
     local inventory, inventoryAt = nil, -math.huge
     local retrySeconds = 20
     local collectionSeconds = 10
+    local harvestSafetySeconds = 5
     local collectionRadiusSq = 35 * 35
     local function planterValue(model, name)
         local obj = model:FindFirstChild(name)
@@ -2265,7 +2308,7 @@ do
         if type(owner) == "string" then return owner == Player.Name end
         return nil
     end
-    local function scanPlanter(item)
+    local function scanPlanterRaw(item)
         local folder = Workspace:FindFirstChild("Planters")
         if not folder then return nil, "Waiting for planters" end
         local own, occupied, uncertain = nil, false, false
@@ -2303,6 +2346,22 @@ do
         if uncertain then return nil, "Checking planter ownership" end
         if occupied then return nil, "Field occupied" end
         return nil, "Not planted"
+    end
+    local function scanPlanter(item)
+        local model, status, level = scanPlanterRaw(item)
+        if status ~= "Ready to harvest" or not item.enabled then
+            item.readyModel, item.readySince = nil, nil
+            return model, status, level
+        end
+        local now = os.clock()
+        if item.readyModel ~= model or not item.readySince then
+            item.readyModel, item.readySince = model, now
+        end
+        local remaining = harvestSafetySeconds - (now - item.readySince)
+        if remaining > 0 then
+            return model, "Harvest safety: " .. math.ceil(remaining) .. "s", level
+        end
+        return model, status, level
     end
     -- Display-only ETA: measure actual growth, then use a fixed deadline.
     -- Never use this estimate to decide whether a planter is ready to harvest.
@@ -2525,6 +2584,7 @@ do
         makeToggle(panel, "Auto " .. item.name, 3, function(value)
             item.enabled = value
             item.retryAt = 0
+            item.readyModel, item.readySince = nil, nil
             item.status = value and "Checking" or "Disabled"
             State.planterEnabled = planters[1].enabled or planters[2].enabled or false
         end)
