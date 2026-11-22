@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.31"
-local HUB_BUILD = "Planter Harvest Safety Buffer"
+local HUB_VERSION = "2.2.32"
+local HUB_BUILD = "Gumdrop Interval Adjustment"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2071,7 +2071,7 @@ task.spawn(function()
                 pcall(function() remote:FireServer("Gumdrops", box) end)
             end
         end
-        task.wait(0.25)
+        task.wait(1.5)
     end
 end)
 
