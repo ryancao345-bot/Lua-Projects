@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.35"
+local HUB_VERSION = "2.2.36"
 local HUB_BUILD = "Manual Field Dice Button"
 
 local Players = game:GetService("Players")
@@ -2145,6 +2145,128 @@ do
         while State.active do
             for _, item in ipairs(converters) do refresh(item) end
             task.wait(0.25)
+        end
+    end)
+end
+
+-- Spider Field Dice automation. Kept separate from the manual Misc dice button.
+do
+    local boostEnabled = false
+    local refreshAt = 45
+    local reserve = 20
+    local boostStatus = infoRow(farmLeft, "Spider Boost: Off", 21)
+
+    heading(farmLeft, "SPIDER FIELD BOOST", 16)
+    makeToggle(farmLeft, "Auto Spider Boost", 17, function(value)
+        boostEnabled = value
+        boostStatus.Text = value and "Spider Boost: Starting..." or "Spider Boost: Off"
+    end)
+
+    local function numberSetting(label, order, initial, minimum, maximum, onValid)
+        local frame = create("Frame", {
+            Size = UDim2.new(1, 0, 0, 35), LayoutOrder = order,
+            BackgroundColor3 = THEME.Control, BorderSizePixel = 0, Parent = farmLeft
+        }, 4)
+        create("TextLabel", {
+            Size = UDim2.new(1, -87, 1, 0), Position = UDim2.fromOffset(9, 0),
+            BackgroundTransparency = 1, Text = label, TextSize = 11,
+            Font = FONT, TextColor3 = THEME.Text,
+            TextXAlignment = Enum.TextXAlignment.Left, Parent = frame
+        })
+        local box = create("TextBox", {
+            Size = UDim2.fromOffset(68, 25), Position = UDim2.new(1, -76, .5, -12),
+            BackgroundColor3 = THEME.Panel, BorderSizePixel = 0,
+            Text = tostring(initial), ClearTextOnFocus = false,
+            TextSize = 12, Font = FONT, TextColor3 = THEME.Text,
+            Parent = frame
+        }, 4)
+        connect(box.FocusLost, function()
+            local parsed = tonumber(box.Text)
+            if parsed then onValid(math.clamp(math.floor(parsed), minimum, maximum)) end
+            box.Text = tostring(onValid())
+        end)
+    end
+    numberSetting("Refresh at (seconds)", 18, refreshAt, 15, 180, function(v)
+        if v then refreshAt = v end
+        return refreshAt
+    end)
+    numberSetting("Minimum dice reserve", 20, reserve, 0, 100000, function(v)
+        if v then reserve = v end
+        return reserve
+    end)
+
+    local function readBoost()
+        local gui = Player:FindFirstChild("PlayerGui")
+        local mainGui = gui and gui:FindFirstChild("Main")
+        local buffs = mainGui and mainGui:FindFirstChild("Buffs")
+        local buff = buffs and buffs:FindFirstChild("Spider Field Boost")
+        if not buff then return 0, 0 end
+        local stack = buff:FindFirstChild("Stack")
+        local time = buff:FindFirstChild("Time")
+        if not stack or not time or not stack:IsA("ValueBase") or not time:IsA("ValueBase") then
+            return nil, nil
+        end
+        return tonumber(stack.Value), tonumber(time.Value)
+    end
+
+    task.spawn(function()
+        local lastStatus = ""
+        local nextRoll = 0
+        while State.active do
+            local label = "Off"
+            if boostEnabled then
+                local inventory = Player:FindFirstChild("Inventory")
+                local dice = inventory and inventory:FindFirstChild("Field Dice")
+                local fields = Workspace:FindFirstChild("Fields")
+                local spider = fields and fields:FindFirstChild("Spider Field")
+                local fieldBox = spider and spider:FindFirstChild("FieldBox")
+                local remotes = RS:FindFirstChild("Remotes")
+                local useItem = remotes and remotes:FindFirstChild("UseItem")
+                local stack, seconds = readBoost()
+                local count = dice and tonumber(dice.Value)
+
+                if not State.farm or State.fieldName ~= "Spider Field" then
+                    label = "Waiting for Spider Auto Farm"
+                elseif not count or not fieldBox or not useItem or stack == nil then
+                    label = "Waiting for game data"
+                elseif stack >= 2 and seconds > refreshAt then
+                    label = string.format("x2 active | %ds | %d dice", math.ceil(seconds), count)
+                elseif count <= reserve then
+                    label = string.format("Paused: %d dice (reserve %d)", count, reserve)
+                else
+                    label = stack >= 2 and "Refreshing x2" or ("Building x2 (stack " .. tostring(stack) .. ")")
+                    if os.clock() >= nextRoll then
+                        local beforeCount = count
+                        local beforeStack, beforeTime = stack, seconds
+                        local ok = pcall(function()
+                            useItem:FireServer("Field Dice", fieldBox)
+                        end)
+                        -- Rapid but acknowledged rolls: normally ~0.2s, with a
+                        -- 0.65s cap for slower server/inventory replication.
+                        if ok then
+                            local deadline = os.clock() + 0.65
+                            repeat
+                                task.wait(0.06)
+                                local newStack, newTime = readBoost()
+                                local newCount = tonumber(dice.Value)
+                                if newCount and newCount < beforeCount then break end
+                                if newStack and newStack > beforeStack then break end
+                                if beforeStack >= 2 and newTime and
+                                    newTime > beforeTime + 30 then break end
+                            until not State.active or not boostEnabled or os.clock() >= deadline
+                            nextRoll = os.clock() + 0.12
+                        else
+                            nextRoll = os.clock() + 1.5
+                            label = "Dice remote unavailable; retrying"
+                        end
+                    end
+                end
+            end
+            if label ~= lastStatus then
+                boostStatus.Text = "Spider Boost: " .. label
+                lastStatus = label
+            end
+            task.wait(0.08)
         end
     end)
 end
