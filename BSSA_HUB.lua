@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.34"
-local HUB_BUILD = "Gumdrop Interval Adjustment"
+local HUB_VERSION = "2.2.35"
+local HUB_BUILD = "Manual Field Dice Button"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2984,6 +2984,24 @@ makeButton(miscPanel, "Open Auto Royal Jelly UI", 11, function()
     jellyOpen(not jellyShown)
 end)
 infoRow(miscPanel, "Separate panel • Close without stopping rolls", 12)
+
+heading(miscPanel, "FIELD DICE", 13)
+makeButton(miscPanel, "Use Field Dice", 14, function()
+    local fields = Workspace:FindFirstChild("Fields")
+    local spider = fields and fields:FindFirstChild("Spider Field")
+    local fieldBox = spider and spider:FindFirstChild("FieldBox")
+    local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+    local useItem = remotes and remotes:FindFirstChild("UseItem")
+
+    if not fieldBox or not useItem then
+        setStatus("Field Dice: remote or Spider Field missing")
+        return
+    end
+
+    useItem:FireServer("Field Dice", fieldBox)
+    setStatus("Used Field Dice on Spider Field")
+end)
+
 
 local function jellyText(text,y,height,size)
     return create("TextLabel", {
