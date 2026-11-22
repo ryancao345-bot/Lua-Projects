@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.32"
+local HUB_VERSION = "2.2.33"
 local HUB_BUILD = "Gumdrop Interval Adjustment"
 
 local Players = game:GetService("Players")
@@ -2071,7 +2071,7 @@ task.spawn(function()
                 pcall(function() remote:FireServer("Gumdrops", box) end)
             end
         end
-        task.wait(1.5)
+        task.wait(1)
     end
 end)
 
