@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.33"
+local HUB_VERSION = "2.2.34"
 local HUB_BUILD = "Gumdrop Interval Adjustment"
 
 local Players = game:GetService("Players")
@@ -78,6 +78,7 @@ local State = {
     farm = false,
     sprout = false,
     convert = false,
+    autoInstantConvert = false,
     hiveConversions = 0,
     dig = false,
     busy = false,
@@ -688,7 +689,7 @@ local resetTokenTracking = function() end
 local resetFarmTargets = function() end
 
 local function convertPollen()
-    if State.busy or not State.active or State.mobFarm then return end
+    if State.busy or not State.active or State.mobFarm or State.autoInstantConvert then return end
     if os.clock() < nextConversionAttempt then return end
 
     local hive = getHiveCF()
@@ -717,7 +718,7 @@ local function convertPollen()
         local stuckSince = os.clock()
         local retries = 0
 
-        while State.active and State.convert do
+        while State.active and State.convert and not State.autoInstantConvert do
             task.wait(CFG.ConvertInterval)
 
             local current = readPollen()
@@ -1343,6 +1344,7 @@ local function farmStep()
     refreshPollen(false)
 
     if State.convert
+        and not State.autoInstantConvert
         and pollenCurrent
         and pollenMaximum
         and pollenCurrent >= pollenMaximum then
@@ -2092,23 +2094,52 @@ do
             or "Use (1 ticket)")
         item.button.TextColor3 = remaining > 0 and THEME.Muted or THEME.Text
     end
+    local nextAttempt = 0
+    local pendingUntil = 0
+    local function useConverter(item)
+        local now = os.clock()
+        if not State.active or now < item.readyAt or now < pendingUntil then return false end
+        local remotes = RS:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("UseMachine")
+        if not remote or not remote:IsA("RemoteEvent") then return false end
+        local ok = pcall(function() remote:FireServer(item.name, 0) end)
+        if ok then
+            item.readyAt = now + 180
+            pendingUntil = now + 2
+            refresh(item)
+        end
+        return ok
+    end
     for i, item in ipairs(converters) do
         item.readyAt = 0
         item.button = makeButton(farmLeft, item.label, 8 + i, function()
-            if not State.active or os.clock() < item.readyAt then return end
-            local remotes = RS:FindFirstChild("Remotes")
-            local remote = remotes and remotes:FindFirstChild("UseMachine")
-            if not remote or not remote:IsA("RemoteEvent") then return end
-            local ok = pcall(function()
-                remote:FireServer(item.name, 0)
-            end)
-            if ok then
-                item.readyAt = os.clock() + 180
-                refresh(item)
-            end
+            useConverter(item)
         end)
         refresh(item)
     end
+    makeToggle(farmLeft, "Auto Instant Convert (99%)", 14, function(value)
+        State.autoInstantConvert = value
+    end)
+    task.spawn(function()
+        while State.active do
+            local now = os.clock()
+            if State.autoInstantConvert and State.farm and not State.busy
+                and not State.planterBusy and now >= pendingUntil and now >= nextAttempt then
+                nextAttempt = now + 0.25
+                local available
+                for _, item in ipairs(converters) do
+                    if now >= item.readyAt then available = item; break end
+                end
+                if available then
+                    local current, maximum = readPollen()
+                    if current and maximum and maximum > 0 and current / maximum >= 0.99 then
+                        useConverter(available)
+                    end
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
     infoRow(farmLeft, "Cooldowns: local estimates", 13)
     task.spawn(function()
         while State.active do
