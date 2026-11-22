@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.36"
+local HUB_VERSION = "2.2.37"
 local HUB_BUILD = "Manual Field Dice Button"
 
 local Players = game:GetService("Players")
@@ -2152,7 +2152,7 @@ end
 -- Spider Field Dice automation. Kept separate from the manual Misc dice button.
 do
     local boostEnabled = false
-    local refreshAt = 45
+    local refreshAt = 90
     local reserve = 20
     local boostStatus = infoRow(farmLeft, "Spider Boost: Off", 21)
 
