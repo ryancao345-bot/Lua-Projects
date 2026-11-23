@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.37"
-local HUB_BUILD = "Manual Field Dice Button"
+local HUB_VERSION = "2.2.39"
+local HUB_BUILD = "ESP Toggles in Misc"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2268,6 +2268,107 @@ do
             end
             task.wait(0.08)
         end
+    end)
+end
+
+-- Visual-only box ESP. SelectionBox follows the actual visible part dimensions,
+-- rather than the larger pickup hitbox, and does not affect farming targets.
+do
+    local tokenESPEnabled = true
+    local markESPEnabled = true
+    local tokenBoxes = {}
+    local markBoxes = {}
+
+    local function clearBoxes(boxes)
+        for object, entry in pairs(boxes) do
+            if entry.box then entry.box:Destroy() end
+            boxes[object] = nil
+        end
+    end
+
+    local function makeBox(part, color)
+        if not part or not part:IsA("BasePart") or not part.Parent then
+            return nil
+        end
+        local box = Instance.new("SelectionBox")
+        box.Name = "BSSA_ESP_Box"
+        box.Adornee = part
+        box.Color3 = color
+        box.SurfaceTransparency = 1
+        box.LineThickness = 0.055
+        box.Parent = gui
+        return box
+    end
+
+    local function tokenVisual(token)
+        local part = token:FindFirstChild("Token")
+        return part and part:IsA("BasePart") and part or nil
+    end
+
+    local function markVisual(mark)
+        local plate = mark:FindFirstChild("Plate", true)
+        if plate and plate:IsA("BasePart") then return plate end
+        local part = mark:FindFirstChild("Honey Mark")
+        if part and part:IsA("BasePart") then return part end
+        return mark:FindFirstChildWhichIsA("BasePart")
+    end
+
+    local function syncBoxes(folder, boxes, enabled, color, findPart, isEligible)
+        if not enabled then
+            clearBoxes(boxes)
+            return
+        end
+        for _, object in ipairs(folder:GetChildren()) do
+            if isEligible(object) then
+                local part = findPart(object)
+                local entry = boxes[object]
+                if not part then
+                    if entry then
+                        entry.box:Destroy()
+                        boxes[object] = nil
+                    end
+                elseif not entry or entry.part ~= part or not entry.box.Parent then
+                    if entry then entry.box:Destroy() end
+                    local box = makeBox(part, color)
+                    if box then boxes[object] = {part = part, box = box} end
+                end
+            end
+        end
+        for object, entry in pairs(boxes) do
+            if object.Parent ~= folder or not isEligible(object)
+                or not entry.part.Parent then
+                entry.box:Destroy()
+                boxes[object] = nil
+            end
+        end
+    end
+
+    heading(miscPanel, "VISUAL ESP", 15)
+    local setTokenESP = makeToggle(miscPanel, "Token ESP (Red)", 16, function(value)
+        tokenESPEnabled = value
+        if not value then clearBoxes(tokenBoxes) end
+    end)
+    local setMarkESP = makeToggle(miscPanel, "Honey Mark ESP (Green)", 17, function(value)
+        markESPEnabled = value
+        if not value then clearBoxes(markBoxes) end
+    end)
+    setTokenESP(true)
+    setMarkESP(true)
+
+    task.spawn(function()
+        while State.active do
+            syncBoxes(Tokens, tokenBoxes, tokenESPEnabled,
+                Color3.fromRGB(255, 45, 45), tokenVisual,
+                function(token)
+                    return token.Name == "All" or token.Name == Player.Name
+                end)
+            syncBoxes(Debris, markBoxes, markESPEnabled,
+                Color3.fromRGB(50, 255, 95), markVisual,
+                function(mark) return mark.Name == "HoneyMark" end)
+            task.wait(0.2)
+        end
+        clearBoxes(tokenBoxes)
+        clearBoxes(markBoxes)
     end)
 end
 
