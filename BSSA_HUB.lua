@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.53"
-local HUB_BUILD = "Smart Inspire Ignores Token Link"
+local HUB_VERSION = "2.2.55"
+local HUB_BUILD = "Inspire Priority 3"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -86,7 +86,6 @@ local State = {
     autoWatermelon = false,
     autoSprout = false,
     autoGumdrop = false,
-    smartInspire = false,
     planterEnabled = false,
     planterBusy = false,
     planterThread = nil,
@@ -799,7 +798,6 @@ end
 -- ============================================================
 
 local tokenIndex = {}
-local inspireSeenAt = {}
 local tokenAttempts = {}
 local tokenCooldowns = {}
 local tokenPending = {}
@@ -962,7 +960,6 @@ local function registerToken(token)
         return false
     end
 
-    inspireSeenAt[token] = os.clock()
     tokenIndex[token] = {
         hitbox = hb,
         visual = visual,
@@ -974,7 +971,6 @@ local function registerToken(token)
 end
 
 local function removeToken(token)
-    inspireSeenAt[token] = nil
     local data = tokenIndex[token]
     if data then recordTokenCollection(token) end
 
@@ -1041,54 +1037,7 @@ resetTokenTracking = function()
     table.clear(tokenCooldowns)
 end
 
--- Inspire scheduling is advisory: physical touches and Token Link can still
--- collect an Inspire token. The timer is measured locally from registration,
--- not a server-confirmed expiration timestamp.
-local Inspire = {
-    seenAt = inspireSeenAt,
-    lifetime = 7.3,
-    safety = 1.0,
-    refreshAt = 1
-}
-
-function Inspire.name(token)
-    return tokenDisplayName(token):lower() == "inspire"
-end
-
-function Inspire.buff()
-    local gui = Player:FindFirstChild("PlayerGui")
-    local main = gui and gui:FindFirstChild("Main")
-    local buffs = main and main:FindFirstChild("Buffs")
-    local boost = buffs and buffs:FindFirstChild("Inspire Boost")
-    local stack = boost and boost:FindFirstChild("Stack")
-    local timer = boost and boost:FindFirstChild("Time")
-    if not (stack and stack:IsA("IntValue") and timer and timer:IsA("IntValue")) then
-        return nil, nil
-    end
-    return stack.Value, timer.Value
-end
-
-function Inspire.urgent(token, now)
-    if not State.smartInspire or not Inspire.name(token) then return false end
-    local stack, remaining = Inspire.buff()
-    -- If GUI values are unavailable, use normal collection rather than
-    -- holding tokens based on a guessed stack or timer.
-    if stack == nil then return true end
-    if stack < 10 or remaining <= Inspire.refreshAt then return true end
-    local born = Inspire.seenAt[token]
-    return born ~= nil and now - born >= Inspire.lifetime - Inspire.safety
-end
-
-function Inspire.allowed(token, now)
-    if State.smartInspire and tokenDisplayName(token):lower() == "token link" then
-        return false
-    end
-    if not State.smartInspire or not Inspire.name(token) then return true end
-    return Inspire.urgent(token, now)
-end
-
--- With Smart Inspire enabled, Token Link is excluded by Inspire.allowed.
--- With Smart Inspire disabled, preserve normal Token Link priority.
+-- Token collection priority: Token Link > White Boost variants > Inspire > other tokens.
 -- Uses the same TokenName lookup and attribute fallback as shouldSkipToken.
 local function tokenCollectionPriority(token)
     local valueObject = token:FindFirstChild("TokenName", true)
@@ -1098,11 +1047,11 @@ local function tokenCollectionPriority(token)
         or token:GetAttribute("TokenName")
 
     local name = value and tostring(value):lower():match("^%s*(.-)%s*$")
-    if Inspire.urgent(token, os.clock()) then
+    if name == "token link" then
         return 3
-    elseif name == "token link" then
-        return 2
     elseif name == "white boost" or name == "ascended white boost" then
+        return 2
+    elseif name == "inspire" then
         return 1
     end
     return 0
@@ -1130,11 +1079,9 @@ local function collectTokens(anchor)
                 )
 
                 if fieldDistance <= FIELD_RADIUS_SQ then
-                    if Inspire.allowed(token, now) then
-                        nearby[#nearby + 1] = data
-                    end
+                    nearby[#nearby + 1] = data
 
-                    if Inspire.allowed(token, now) and (tokenCooldowns[hb] or 0) <= now then
+                    if (tokenCooldowns[hb] or 0) <= now then
                         local playerDistance = distanceSquared(
                             hb.Position,
                             root.Position
@@ -1164,7 +1111,7 @@ local function collectTokens(anchor)
     local bestScore = -math.huge
     for _, candidate in ipairs(nearby) do
         local candidateHB = candidate.hitbox
-        if Inspire.allowed(candidate.token, now) and (tokenCooldowns[candidateHB] or 0) <= now then
+        if (tokenCooldowns[candidateHB] or 0) <= now then
             local priority = tokenCollectionPriority(candidate.token)
             if priority == bestPriority then
                 local nearbyCount = 0
@@ -1214,11 +1161,6 @@ local function collectTokens(anchor)
             break
         end
 
-        if not Inspire.allowed(best.token, os.clock()) then
-            interrupted = true
-            break
-        end
-
         if not hb.Parent or not visual.Parent or not tokenAlive(hb, visual) then
             collected = true
             break
@@ -1248,10 +1190,6 @@ local function collectTokens(anchor)
                 break
             end
 
-            if not Inspire.allowed(best.token, os.clock()) then
-                interrupted = true
-                break
-            end
             if not tokenAlive(hb, visual) then
                 collected = true
                 break
@@ -1263,7 +1201,7 @@ local function collectTokens(anchor)
 
             for _, other in ipairs(touchNeighbors) do
                 local otherHB = other.hitbox
-                if Inspire.allowed(other.token, os.clock()) and tokenAlive(otherHB, other.visual) then
+                if tokenAlive(otherHB, other.visual) then
                     -- Preserve the original 6-stud constraint if a token moves.
                     if distanceSquared(otherHB.Position, hb.Position) <= NEAR_TOKEN_SQ then
                         touchToken(otherHB)
@@ -2251,10 +2189,6 @@ setFarmVisual = makeToggle(farmLeft, "Autofarm", 3, function(value)
     else
         setStatus("Ready")
     end
-end)
-
-makeToggle(farmLeft, "Smart Inspire (x10)", 8, function(value)
-    State.smartInspire = value
 end)
 
 makeToggle(farmLeft, "Auto Dig", 4, function(value)
