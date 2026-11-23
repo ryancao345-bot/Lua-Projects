@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.42"
-local HUB_BUILD = "Filtered Token ESP"
+local HUB_VERSION = "2.2.43"
+local HUB_BUILD = "White Boost Token Priority"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -981,6 +981,24 @@ resetTokenTracking = function()
     table.clear(tokenCooldowns)
 end
 
+-- Token collection priority: Token Link > White Boost variants > other tokens.
+-- Uses the same TokenName lookup and attribute fallback as shouldSkipToken.
+local function tokenCollectionPriority(token)
+    local valueObject = token:FindFirstChild("TokenName", true)
+    local value = valueObject
+        and valueObject:IsA("ValueBase")
+        and valueObject.Value
+        or token:GetAttribute("TokenName")
+
+    local name = value and tostring(value):lower():match("^%s*(.-)%s*$")
+    if name == "token link" then
+        return 2
+    elseif name == "white boost" or name == "ascended white boost" then
+        return 1
+    end
+    return 0
+end
+
 local function collectTokens(anchor)
     local root = getRoot()
     if not root or not anchor then return false end
@@ -988,6 +1006,7 @@ local function collectTokens(anchor)
     local now = os.clock()
     local best
     local bestDistance = FIELD_RADIUS_SQ
+    local bestPriority = -1
     local nearby = {}
 
     for token, data in pairs(tokenIndex) do
@@ -1010,7 +1029,10 @@ local function collectTokens(anchor)
                             root.Position
                         )
 
-                        if playerDistance < bestDistance then
+                        local priority = tokenCollectionPriority(token)
+                        if priority > bestPriority
+                            or (priority == bestPriority and playerDistance < bestDistance) then
+                            bestPriority = priority
                             bestDistance = playerDistance
                             best = data
                         end
