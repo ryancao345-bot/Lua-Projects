@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.39"
-local HUB_BUILD = "ESP Toggles in Misc"
+local HUB_VERSION = "2.2.40"
+local HUB_BUILD = "Brighter Padded Box ESP"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2271,33 +2271,57 @@ do
     end)
 end
 
--- Visual-only box ESP. SelectionBox follows the actual visible part dimensions,
--- rather than the larger pickup hitbox, and does not affect farming targets.
+-- Visual-only ESP: invisible, non-colliding sizing proxies keep the
+-- wireframe slightly larger than the real parts without changing game objects.
 do
     local tokenESPEnabled = true
     local markESPEnabled = true
     local tokenBoxes = {}
     local markBoxes = {}
+    local espFolder = Instance.new("Folder")
+    espFolder.Name = "BSSA_ESP_Visuals"
+    espFolder.Parent = Workspace
 
-    local function clearBoxes(boxes)
-        for object, entry in pairs(boxes) do
+    local function removeEntry(boxes, object)
+        local entry = boxes[object]
+        if entry then
             if entry.box then entry.box:Destroy() end
+            if entry.proxy then entry.proxy:Destroy() end
             boxes[object] = nil
         end
     end
 
-    local function makeBox(part, color)
+    local function clearBoxes(boxes)
+        for object in pairs(boxes) do
+            removeEntry(boxes, object)
+        end
+    end
+
+    local function makeBox(part, color, isMark)
         if not part or not part:IsA("BasePart") or not part.Parent then
             return nil
         end
+        local proxy = Instance.new("Part")
+        proxy.Name = "BSSA_ESP_Visual_Only"
+        proxy.Anchored = true
+        proxy.CanCollide = false
+        proxy.CanTouch = false
+        proxy.CanQuery = false
+        proxy.Transparency = 1
+        proxy.CastShadow = false
+        proxy.Size = isMark and Vector3.new(2.55, 1.5, 2.3)
+            or (part.Size + Vector3.new(0.35, 0.35, 0.35))
+        proxy.CFrame = part.CFrame
+        proxy.Parent = espFolder
+
         local box = Instance.new("SelectionBox")
         box.Name = "BSSA_ESP_Box"
-        box.Adornee = part
+        box.Adornee = proxy
         box.Color3 = color
         box.SurfaceTransparency = 1
-        box.LineThickness = 0.055
+        box.LineThickness = 0.12
         box.Parent = gui
-        return box
+        return {part = part, proxy = proxy, box = box}
     end
 
     local function tokenVisual(token)
@@ -2308,12 +2332,10 @@ do
     local function markVisual(mark)
         local plate = mark:FindFirstChild("Plate", true)
         if plate and plate:IsA("BasePart") then return plate end
-        local part = mark:FindFirstChild("Honey Mark")
-        if part and part:IsA("BasePart") then return part end
-        return mark:FindFirstChildWhichIsA("BasePart")
+        return nil -- Avoid outlining the full 18-stud main part.
     end
 
-    local function syncBoxes(folder, boxes, enabled, color, findPart, isEligible)
+    local function syncBoxes(folder, boxes, enabled, color, findPart, isEligible, isMark)
         if not enabled then
             clearBoxes(boxes)
             return
@@ -2323,22 +2345,26 @@ do
                 local part = findPart(object)
                 local entry = boxes[object]
                 if not part then
-                    if entry then
-                        entry.box:Destroy()
-                        boxes[object] = nil
+                    removeEntry(boxes, object)
+                else
+                    if not entry or entry.part ~= part or not entry.box.Parent then
+                        removeEntry(boxes, object)
+                        entry = makeBox(part, color, isMark)
+                        boxes[object] = entry
                     end
-                elseif not entry or entry.part ~= part or not entry.box.Parent then
-                    if entry then entry.box:Destroy() end
-                    local box = makeBox(part, color)
-                    if box then boxes[object] = {part = part, box = box} end
+                    if entry then
+                        entry.proxy.CFrame = part.CFrame
+                        if not isMark then
+                            entry.proxy.Size = part.Size + Vector3.new(0.35, 0.35, 0.35)
+                        end
+                    end
                 end
             end
         end
         for object, entry in pairs(boxes) do
             if object.Parent ~= folder or not isEligible(object)
                 or not entry.part.Parent then
-                entry.box:Destroy()
-                boxes[object] = nil
+                removeEntry(boxes, object)
             end
         end
     end
@@ -2358,17 +2384,18 @@ do
     task.spawn(function()
         while State.active do
             syncBoxes(Tokens, tokenBoxes, tokenESPEnabled,
-                Color3.fromRGB(255, 45, 45), tokenVisual,
+                Color3.fromRGB(255, 25, 25), tokenVisual,
                 function(token)
                     return token.Name == "All" or token.Name == Player.Name
-                end)
+                end, false)
             syncBoxes(Debris, markBoxes, markESPEnabled,
-                Color3.fromRGB(50, 255, 95), markVisual,
-                function(mark) return mark.Name == "HoneyMark" end)
+                Color3.fromRGB(100, 255, 15), markVisual,
+                function(mark) return mark.Name == "HoneyMark" end, true)
             task.wait(0.2)
         end
         clearBoxes(tokenBoxes)
         clearBoxes(markBoxes)
+        espFolder:Destroy()
     end)
 end
 
