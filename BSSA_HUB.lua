@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.49"
-local HUB_BUILD = "Token Pickup Timing Monitor"
+local HUB_VERSION = "2.2.50"
+local HUB_BUILD = "Token Collection Diagnostics"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -812,6 +812,12 @@ local tokenByName = {}
 local tokenPickupLatencies = {}
 local tokenMonitorRefresh = function() end
 local tokenMonitorStarted = os.clock()
+local tokenDiagnostics = {
+    visits = 0, firstSuccess = 0, retrySuccess = 0,
+    failedVisits = 0, failedAttemptSeconds = 0,
+    retryAttempts = 0, nearbyPickups = 0,
+    activeTarget = nil
+}
 
 local function tokenDisplayName(token)
     local obj = token:FindFirstChild("TokenName", true)
@@ -828,6 +834,9 @@ local function recordTokenCollection(token)
     local touchedAt = hb and tokenTouchedAt[hb]
     if not touchedAt or os.clock() - touchedAt > 2 then return end
     tokenCounted[token] = true
+    if tokenDiagnostics.activeTarget and tokenDiagnostics.activeTarget ~= token then
+        tokenDiagnostics.nearbyPickups += 1
+    end
     local now = os.clock()
     local name = tokenDisplayName(token)
     local previousPickupAt = tokenCollectionTimes[#tokenCollectionTimes]
@@ -1127,6 +1136,9 @@ local function collectTokens(anchor)
     local collected = false
     local interrupted = false
     local attemptsThisVisit = 0
+    local unsuccessfulSeconds = 0
+    tokenDiagnostics.visits += 1
+    tokenDiagnostics.activeTarget = best.token
 
     -- Keep retries at the token instead of returning to the field between attempts.
     while attemptsThisVisit < CFG.TokenMaxAttempts do
@@ -1144,6 +1156,7 @@ local function collectTokens(anchor)
         end
 
         attemptsThisVisit += 1
+        if attemptsThisVisit > 1 then tokenDiagnostics.retryAttempts += 1 end
         if not teleport(hb.CFrame) then
             interrupted = true
             break
@@ -1204,7 +1217,24 @@ local function collectTokens(anchor)
             RunService.Heartbeat:Wait()
         until os.clock() - confirmStart >= confirmTime
 
+        if not collected and not interrupted and tokenAlive(hb, visual) then
+            unsuccessfulSeconds += os.clock() - attemptStart
+        end
         if interrupted or collected then break end
+    end
+
+    tokenDiagnostics.activeTarget = nil
+    tokenDiagnostics.failedAttemptSeconds += unsuccessfulSeconds
+    if not interrupted then
+        if collected or not tokenAlive(hb, visual) then
+            if attemptsThisVisit == 1 then
+                tokenDiagnostics.firstSuccess += 1
+            elseif attemptsThisVisit > 1 then
+                tokenDiagnostics.retrySuccess += 1
+            end
+        else
+            tokenDiagnostics.failedVisits += 1
+        end
     end
 
     if collected or not tokenAlive(hb, visual) then
@@ -3333,7 +3363,7 @@ infoRow(miscPanel, "Separate panel • Close without stopping rolls", 12)
 do -- Isolate token monitor GUI locals to stay within Luau register limit.
 -- Token monitor: separate companion window, matching Auto Royal Jelly placement.
 local tokenWindow = create("Frame", {
-    Size=UDim2.fromOffset(365, 420),
+    Size=UDim2.fromOffset(365, 505),
     BackgroundColor3=Color3.fromRGB(19,23,34),
     BorderSizePixel=0, Visible=false, Active=true, Parent=gui
 }, 11)
@@ -3344,7 +3374,7 @@ local function positionTokenWindow()
     local x = main.AbsolutePosition.X + main.AbsoluteSize.X + 12
     if x + 365 > viewport.X - 8 then x = main.AbsolutePosition.X - 377 end
     x = math.clamp(x, 8, math.max(8, viewport.X - 373))
-    local y = math.clamp(main.AbsolutePosition.Y, 8, math.max(8, viewport.Y - 428))
+    local y = math.clamp(main.AbsolutePosition.Y, 8, math.max(8, viewport.Y - 513))
     tokenWindow.Position = UDim2.fromOffset(x, y)
 end
 local function showTokenWindow(show)
@@ -3382,14 +3412,18 @@ end
 local tokenMinuteText = monitorLabel(47,25,"Last 60 seconds: 0")
 local tokenIntervalText = monitorLabel(76,25,"Average between pickups: --")
 local tokenLatencyText = monitorLabel(105,25,"Average touch-to-disappear: --")
-local tokenNote = monitorLabel(139,39,"Estimated pickups: disappearance after scripted touch",10)
+local tokenDiagnostic1 = monitorLabel(137,22,"First-attempt success: --")
+local tokenDiagnostic2 = monitorLabel(160,22,"Retries: 0 | Retry successes: 0")
+local tokenDiagnostic3 = monitorLabel(183,22,"Failed visits: 0 | Failed-attempt time: 0.0s")
+local tokenDiagnostic4 = monitorLabel(206,22,"Pickups during target visits: 0")
+local tokenNote = monitorLabel(235,28,"Estimated pickups: disappearance after scripted touch",10)
 tokenNote.TextColor3 = THEME.Muted
 tokenNote.TextWrapped = true
-local tokenFeedTitle = monitorLabel(183,20,"RECENT PICKUPS (NEWEST FIRST)",11)
+local tokenFeedTitle = monitorLabel(270,20,"RECENT PICKUPS (NEWEST FIRST)",11)
 tokenFeedTitle.Font=FONT_BOLD
 tokenFeedTitle.TextColor3=THEME.Accent
 local tokenFeed = create("ScrollingFrame", {
-    Position=UDim2.fromOffset(14,210), Size=UDim2.fromOffset(337,195),
+    Position=UDim2.fromOffset(14,296), Size=UDim2.fromOffset(337,195),
     BackgroundColor3=THEME.Control, BorderSizePixel=0,
     ScrollBarThickness=3, CanvasSize=UDim2.new(),
     AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=tokenWindow
@@ -3426,6 +3460,14 @@ local function updateTokenMonitor()
             latencyCount += 1
         end
     end
+    local d = tokenDiagnostics
+    local completed = d.firstSuccess + d.retrySuccess + d.failedVisits
+    tokenDiagnostic1.Text = completed > 0
+        and string.format("First-attempt success: %d/%d (%.1f%%)", d.firstSuccess, completed, 100*d.firstSuccess/completed)
+        or "First-attempt success: --"
+    tokenDiagnostic2.Text = string.format("Retries: %d | Retry successes: %d", d.retryAttempts, d.retrySuccess)
+    tokenDiagnostic3.Text = string.format("Failed visits: %d | Failed-attempt time: %.1fs", d.failedVisits, d.failedAttemptSeconds)
+    tokenDiagnostic4.Text = string.format("Pickups during target visits: %d", d.nearbyPickups)
     tokenMinuteText.Text = "Last 60 seconds: " .. tostring(n60)
     tokenIntervalText.Text = intervalCount > 0
         and string.format("Avg between pickups (60s): %.3fs", intervalTotal / intervalCount)
