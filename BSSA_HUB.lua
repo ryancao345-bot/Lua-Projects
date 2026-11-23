@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.50"
+local HUB_VERSION = "2.2.51"
 local HUB_BUILD = "Token Collection Diagnostics"
 
 local Players = game:GetService("Players")
@@ -1133,6 +1133,15 @@ local function collectTokens(anchor)
 
     local hb = best.hitbox
     local visual = best.visual
+    -- Cache the pickup neighborhood for this visit instead of scanning and
+    -- distance-checking every field token on every Heartbeat.
+    local touchNeighbors = {}
+    for _, other in ipairs(nearby) do
+        if other.hitbox ~= hb
+            and distanceSquared(other.hitbox.Position, hb.Position) <= NEAR_TOKEN_SQ then
+            touchNeighbors[#touchNeighbors + 1] = other
+        end
+    end
     local collected = false
     local interrupted = false
     local attemptsThisVisit = 0
@@ -1188,9 +1197,10 @@ local function collectTokens(anchor)
             teleport(hb.CFrame)
             touchToken(hb)
 
-            for _, other in ipairs(nearby) do
+            for _, other in ipairs(touchNeighbors) do
                 local otherHB = other.hitbox
-                if otherHB ~= hb and tokenAlive(otherHB, other.visual) then
+                if tokenAlive(otherHB, other.visual) then
+                    -- Preserve the original 6-stud constraint if a token moves.
                     if distanceSquared(otherHB.Position, hb.Position) <= NEAR_TOKEN_SQ then
                         touchToken(otherHB)
                     end
