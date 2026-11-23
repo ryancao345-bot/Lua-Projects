@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.40"
-local HUB_BUILD = "Brighter Padded Box ESP"
+local HUB_VERSION = "2.2.41"
+local HUB_BUILD = "Smooth Token ESP Tracking"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2353,8 +2353,9 @@ do
                         boxes[object] = entry
                     end
                     if entry then
-                        entry.proxy.CFrame = part.CFrame
-                        if not isMark then
+                        if isMark then
+                            entry.proxy.CFrame = part.CFrame
+                        else
                             entry.proxy.Size = part.Size + Vector3.new(0.35, 0.35, 0.35)
                         end
                     end
@@ -2380,6 +2381,26 @@ do
     end)
     setTokenESP(true)
     setMarkESP(true)
+
+    -- Token visuals rotate independently of the 0.2-second discovery scan.
+    -- Follow their current CFrame every rendered frame for smooth outlines.
+    connect(RunService.RenderStepped, function()
+        if not State.active or not tokenESPEnabled then return end
+        for token, entry in pairs(tokenBoxes) do
+            if token.Parent ~= Tokens or not entry.part:IsDescendantOf(token)
+                or not entry.proxy.Parent then
+                removeEntry(tokenBoxes, token)
+            else
+                entry.proxy.CFrame = entry.part.CFrame
+            end
+        end
+    end)
+
+    -- Remove the box as soon as the token leaves its container, rather than
+    -- waiting for the next periodic discovery pass.
+    connect(Tokens.ChildRemoved, function(token)
+        removeEntry(tokenBoxes, token)
+    end)
 
     task.spawn(function()
         while State.active do
