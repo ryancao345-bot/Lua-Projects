@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.48"
-local HUB_BUILD = "Cluster-Aware Token Targeting"
+local HUB_VERSION = "2.2.49"
+local HUB_BUILD = "Token Pickup Timing Monitor"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -809,6 +809,7 @@ local tokenCollectedTotal = 0
 local tokenCollectionTimes = {}
 local tokenRecent = {}
 local tokenByName = {}
+local tokenPickupLatencies = {}
 local tokenMonitorRefresh = function() end
 local tokenMonitorStarted = os.clock()
 
@@ -829,10 +830,14 @@ local function recordTokenCollection(token)
     tokenCounted[token] = true
     local now = os.clock()
     local name = tokenDisplayName(token)
+    local previousPickupAt = tokenCollectionTimes[#tokenCollectionTimes]
+    local interval = previousPickupAt and (now - previousPickupAt) or nil
+    local pickupLatency = now - touchedAt
+    tokenPickupLatencies[#tokenPickupLatencies + 1] = pickupLatency
     tokenCollectedTotal += 1
     tokenCollectionTimes[#tokenCollectionTimes + 1] = now
     tokenByName[name] = (tokenByName[name] or 0) + 1
-    table.insert(tokenRecent, 1, {name=name, time=now})
+    table.insert(tokenRecent, 1, {name=name, time=now, interval=interval, latency=pickupLatency})
     if #tokenRecent > 60 then table.remove(tokenRecent) end
     tokenMonitorRefresh()
 end
@@ -3374,17 +3379,17 @@ local function monitorLabel(y, height, initial, size)
         TextYAlignment=Enum.TextYAlignment.Center, Parent=tokenWindow
     })
 end
-local tokenTotalText = monitorLabel(44,23,"Observed pickups: 0")
-local tokenMinuteText = monitorLabel(68,23,"Last 60 seconds: 0")
-local tokenRateText = monitorLabel(92,23,"5-minute rate: Calculating...")
-local tokenElapsedText = monitorLabel(116,23,"Monitoring: 0s")
-local tokenNote = monitorLabel(142,28,"Estimates: disappeared after scripted touch",10)
+local tokenMinuteText = monitorLabel(47,25,"Last 60 seconds: 0")
+local tokenIntervalText = monitorLabel(76,25,"Average between pickups: --")
+local tokenLatencyText = monitorLabel(105,25,"Average touch-to-disappear: --")
+local tokenNote = monitorLabel(139,39,"Estimated pickups: disappearance after scripted touch",10)
 tokenNote.TextColor3 = THEME.Muted
-local tokenFeedTitle = monitorLabel(173,20,"RECENT PICKUPS (NEWEST FIRST)",11)
+tokenNote.TextWrapped = true
+local tokenFeedTitle = monitorLabel(183,20,"RECENT PICKUPS (NEWEST FIRST)",11)
 tokenFeedTitle.Font=FONT_BOLD
 tokenFeedTitle.TextColor3=THEME.Accent
 local tokenFeed = create("ScrollingFrame", {
-    Position=UDim2.fromOffset(14,196), Size=UDim2.fromOffset(337,126),
+    Position=UDim2.fromOffset(14,210), Size=UDim2.fromOffset(337,195),
     BackgroundColor3=THEME.Control, BorderSizePixel=0,
     ScrollBarThickness=3, CanvasSize=UDim2.new(),
     AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=tokenWindow
@@ -3393,12 +3398,6 @@ create("UIPadding", {PaddingTop=UDim.new(0,5), PaddingLeft=UDim.new(0,8),
     PaddingRight=UDim.new(0,8), PaddingBottom=UDim.new(0,5), Parent=tokenFeed})
 create("UIListLayout", {Padding=UDim.new(0,3), SortOrder=Enum.SortOrder.LayoutOrder,
     Parent=tokenFeed})
-local tokenTopTitle = monitorLabel(327,20,"MOST COLLECTED",11)
-tokenTopTitle.Font=FONT_BOLD
-tokenTopTitle.TextColor3=THEME.Accent
-local tokenTopText = monitorLabel(349,58,"No observed pickups yet",11)
-tokenTopText.TextYAlignment=Enum.TextYAlignment.Top
-tokenTopText.TextWrapped=true
 local feedRows = {}
 for i=1,12 do
     feedRows[i] = create("TextLabel", {
@@ -3411,39 +3410,37 @@ end
 local function updateTokenMonitor()
     if not tokenWindowShown or not main.Visible then return end
     local now = os.clock()
-    local n60, n300 = 0, 0
+    local n60, intervalTotal, intervalCount, latencyTotal, latencyCount = 0, 0, 0, 0, 0
     for i=#tokenCollectionTimes,1,-1 do
-        local age = now - tokenCollectionTimes[i]
-        if age <= 60 then n60 += 1 end
-        if age <= 300 then n300 += 1 else break end
+        local pickupTime = tokenCollectionTimes[i]
+        if now - pickupTime > 60 then break end
+        n60 += 1
+        local previousTime = tokenCollectionTimes[i-1]
+        if previousTime and now - previousTime <= 60 then
+            intervalTotal += pickupTime - previousTime
+            intervalCount += 1
+        end
+        local latency = tokenPickupLatencies[i]
+        if latency then
+            latencyTotal += latency
+            latencyCount += 1
+        end
     end
-    local elapsed = now - tokenMonitorStarted
-    tokenTotalText.Text = "Observed pickups: " .. tostring(tokenCollectedTotal)
     tokenMinuteText.Text = "Last 60 seconds: " .. tostring(n60)
-    tokenRateText.Text = elapsed >= 10
-        and ("5-minute rate: " .. tostring(math.floor(n300 / math.min(elapsed,300) * 3600 + .5)) .. "/hr")
-        or "5-minute rate: Calculating..."
-    tokenElapsedText.Text = "Monitoring: " .. tostring(math.floor(elapsed)) .. "s"
+    tokenIntervalText.Text = intervalCount > 0
+        and string.format("Avg between pickups (60s): %.3fs", intervalTotal / intervalCount)
+        or "Avg between pickups (60s): --"
+    tokenLatencyText.Text = latencyCount > 0
+        and string.format("Avg touch-to-disappear (60s): %.3fs", latencyTotal / latencyCount)
+        or "Avg touch-to-disappear (60s): --"
     for i, row in ipairs(feedRows) do
         local entry = tokenRecent[i]
         row.Visible = entry ~= nil
         if entry then
-            row.Text = string.format("%ds ago  •  %s", math.floor(now-entry.time), entry.name)
+            local gap = entry.interval and string.format("+%.2fs", entry.interval) or "first"
+            row.Text = string.format("%ds ago • %s • %s", math.floor(now-entry.time), entry.name, gap)
         end
     end
-    local sorted = {}
-    for name, count in pairs(tokenByName) do
-        sorted[#sorted+1] = {name=name, count=count}
-    end
-    table.sort(sorted, function(a,b)
-        if a.count == b.count then return a.name < b.name end
-        return a.count > b.count
-    end)
-    local top = {}
-    for i=1,math.min(3,#sorted) do
-        top[#top+1] = sorted[i].name .. " ×" .. sorted[i].count
-    end
-    tokenTopText.Text = #top > 0 and table.concat(top, "   |   ") or "No observed pickups yet"
 end
 tokenMonitorRefresh = updateTokenMonitor
 task.spawn(function()
@@ -3457,7 +3454,7 @@ makeButton(miscPanel, "Open Token Collection Monitor", 18, function()
     showTokenWindow(not tokenWindowShown)
     updateTokenMonitor()
 end)
-infoRow(miscPanel, "Live pickup feed • Rates • Token breakdown", 19)
+infoRow(miscPanel, "Pickup intervals • Last 60 seconds • Live feed", 19)
 
 end -- Token monitor GUI scope
 
@@ -4222,6 +4219,7 @@ cleanup = function()
     table.clear(tokenCollectionTimes)
     table.clear(tokenRecent)
     table.clear(tokenByName)
+    table.clear(tokenPickupLatencies)
 
     if gui and gui.Parent then
         gui:Destroy()
