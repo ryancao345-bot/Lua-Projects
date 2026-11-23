@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.45"
-local HUB_BUILD = "Token Collection Monitor"
+local HUB_VERSION = "2.2.46"
+local HUB_BUILD = "Fix Local Register Limit"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3777,6 +3777,7 @@ connect(jellyStart.MouseButton1Click, function()
     end)
 end)
 
+do
 heading(miscPanel, "PROMO CODES", 7)
 
 local PROMO_CODES = {
@@ -3835,6 +3836,9 @@ makeButton(miscPanel, "Submit All Codes", 9, function(button)
     end)
 end)
 
+end -- Promo code controls scope
+
+local function startHoneyStats()
 local SUFFIX = {
     k = 1e3,
     m = 1e6,
@@ -4049,6 +4053,9 @@ task.spawn(function()
         end
     end
 end)
+
+end -- Honey statistics function
+startHoneyStats()
 
 -- Dragging
 
