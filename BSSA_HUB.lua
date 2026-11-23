@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.41"
-local HUB_BUILD = "Smooth Token ESP Tracking"
+local HUB_VERSION = "2.2.42"
+local HUB_BUILD = "Filtered Token ESP"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2271,33 +2271,31 @@ do
     end)
 end
 
--- Visual-only ESP: invisible, non-colliding sizing proxies keep the
+-- Visual-only token ESP: invisible, non-colliding sizing proxies keep the
 -- wireframe slightly larger than the real parts without changing game objects.
 do
     local tokenESPEnabled = true
-    local markESPEnabled = true
     local tokenBoxes = {}
-    local markBoxes = {}
     local espFolder = Instance.new("Folder")
     espFolder.Name = "BSSA_ESP_Visuals"
     espFolder.Parent = Workspace
 
-    local function removeEntry(boxes, object)
-        local entry = boxes[object]
+    local function removeEntry(token)
+        local entry = tokenBoxes[token]
         if entry then
             if entry.box then entry.box:Destroy() end
             if entry.proxy then entry.proxy:Destroy() end
-            boxes[object] = nil
+            tokenBoxes[token] = nil
         end
     end
 
-    local function clearBoxes(boxes)
-        for object in pairs(boxes) do
-            removeEntry(boxes, object)
+    local function clearBoxes()
+        for token in pairs(tokenBoxes) do
+            removeEntry(token)
         end
     end
 
-    local function makeBox(part, color, isMark)
+    local function makeBox(part)
         if not part or not part:IsA("BasePart") or not part.Parent then
             return nil
         end
@@ -2309,63 +2307,53 @@ do
         proxy.CanQuery = false
         proxy.Transparency = 1
         proxy.CastShadow = false
-        proxy.Size = isMark and Vector3.new(2.55, 1.5, 2.3)
-            or (part.Size + Vector3.new(0.35, 0.35, 0.35))
+        proxy.Size = part.Size + Vector3.new(0.35, 0.35, 0.35)
         proxy.CFrame = part.CFrame
         proxy.Parent = espFolder
 
         local box = Instance.new("SelectionBox")
         box.Name = "BSSA_ESP_Box"
         box.Adornee = proxy
-        box.Color3 = color
+        box.Color3 = Color3.fromRGB(255, 25, 25)
         box.SurfaceTransparency = 1
         box.LineThickness = 0.12
         box.Parent = gui
         return {part = part, proxy = proxy, box = box}
     end
 
-    local function tokenVisual(token)
-        local part = token:FindFirstChild("Token")
-        return part and part:IsA("BasePart") and part or nil
+    local function tokenEligible(token)
+        return (token.Name == "All" or token.Name == Player.Name)
+            and not shouldSkipToken(token)
     end
 
-    local function markVisual(mark)
-        local plate = mark:FindFirstChild("Plate", true)
-        if plate and plate:IsA("BasePart") then return plate end
-        return nil -- Avoid outlining the full 18-stud main part.
-    end
-
-    local function syncBoxes(folder, boxes, enabled, color, findPart, isEligible, isMark)
-        if not enabled then
-            clearBoxes(boxes)
+    local function syncBoxes()
+        if not tokenESPEnabled then
+            clearBoxes()
             return
         end
-        for _, object in ipairs(folder:GetChildren()) do
-            if isEligible(object) then
-                local part = findPart(object)
-                local entry = boxes[object]
+        for _, token in ipairs(Tokens:GetChildren()) do
+            if tokenEligible(token) then
+                local part = token:FindFirstChild("Token")
+                if not (part and part:IsA("BasePart")) then part = nil end
+                local entry = tokenBoxes[token]
                 if not part then
-                    removeEntry(boxes, object)
+                    removeEntry(token)
                 else
                     if not entry or entry.part ~= part or not entry.box.Parent then
-                        removeEntry(boxes, object)
-                        entry = makeBox(part, color, isMark)
-                        boxes[object] = entry
+                        removeEntry(token)
+                        entry = makeBox(part)
+                        tokenBoxes[token] = entry
                     end
                     if entry then
-                        if isMark then
-                            entry.proxy.CFrame = part.CFrame
-                        else
-                            entry.proxy.Size = part.Size + Vector3.new(0.35, 0.35, 0.35)
-                        end
+                        entry.proxy.Size = part.Size + Vector3.new(0.35, 0.35, 0.35)
                     end
                 end
             end
         end
-        for object, entry in pairs(boxes) do
-            if object.Parent ~= folder or not isEligible(object)
+        for token, entry in pairs(tokenBoxes) do
+            if token.Parent ~= Tokens or not tokenEligible(token)
                 or not entry.part.Parent then
-                removeEntry(boxes, object)
+                removeEntry(token)
             end
         end
     end
@@ -2373,49 +2361,34 @@ do
     heading(miscPanel, "VISUAL ESP", 15)
     local setTokenESP = makeToggle(miscPanel, "Token ESP (Red)", 16, function(value)
         tokenESPEnabled = value
-        if not value then clearBoxes(tokenBoxes) end
-    end)
-    local setMarkESP = makeToggle(miscPanel, "Honey Mark ESP (Green)", 17, function(value)
-        markESPEnabled = value
-        if not value then clearBoxes(markBoxes) end
+        if not value then clearBoxes() end
     end)
     setTokenESP(true)
-    setMarkESP(true)
 
-    -- Token visuals rotate independently of the 0.2-second discovery scan.
-    -- Follow their current CFrame every rendered frame for smooth outlines.
+    -- Follow token rotation every rendered frame for smooth outlines.
     connect(RunService.RenderStepped, function()
         if not State.active or not tokenESPEnabled then return end
         for token, entry in pairs(tokenBoxes) do
             if token.Parent ~= Tokens or not entry.part:IsDescendantOf(token)
                 or not entry.proxy.Parent then
-                removeEntry(tokenBoxes, token)
+                removeEntry(token)
             else
                 entry.proxy.CFrame = entry.part.CFrame
             end
         end
     end)
 
-    -- Remove the box as soon as the token leaves its container, rather than
-    -- waiting for the next periodic discovery pass.
+    -- Remove the box immediately when the token leaves its container.
     connect(Tokens.ChildRemoved, function(token)
-        removeEntry(tokenBoxes, token)
+        removeEntry(token)
     end)
 
     task.spawn(function()
         while State.active do
-            syncBoxes(Tokens, tokenBoxes, tokenESPEnabled,
-                Color3.fromRGB(255, 25, 25), tokenVisual,
-                function(token)
-                    return token.Name == "All" or token.Name == Player.Name
-                end, false)
-            syncBoxes(Debris, markBoxes, markESPEnabled,
-                Color3.fromRGB(100, 255, 15), markVisual,
-                function(mark) return mark.Name == "HoneyMark" end, true)
+            syncBoxes()
             task.wait(0.2)
         end
-        clearBoxes(tokenBoxes)
-        clearBoxes(markBoxes)
+        clearBoxes()
         espFolder:Destroy()
     end)
 end
