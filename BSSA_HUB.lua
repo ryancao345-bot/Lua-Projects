@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.47"
-local HUB_BUILD = "Fix Local Register Limit"
+local HUB_VERSION = "2.2.48"
+local HUB_BUILD = "Cluster-Aware Token Targeting"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -1085,6 +1085,37 @@ local function collectTokens(anchor)
     end
 
     if not best then return false end
+
+    -- Prefer a cluster of eligible tokens when priority is equal. The existing
+    -- touch loop already attempts pickups within 6 studs of its target; this
+    -- chooses a target that can make better use of that same visit. Keep the
+    -- original nearest-target behavior as the fallback and preserve priority.
+    -- A small, capped cluster bonus prevents a distant group from winning
+    -- solely because it contains many tokens.
+    local bestScore = -math.huge
+    for _, candidate in ipairs(nearby) do
+        local candidateHB = candidate.hitbox
+        if (tokenCooldowns[candidateHB] or 0) <= now then
+            local priority = tokenCollectionPriority(candidate.token)
+            if priority == bestPriority then
+                local nearbyCount = 0
+                for _, other in ipairs(nearby) do
+                    if other ~= candidate
+                        and distanceSquared(other.hitbox.Position, candidateHB.Position) <= NEAR_TOKEN_SQ then
+                        nearbyCount += 1
+                    end
+                end
+                -- Each extra nearby token offsets up to 12 studs of distance;
+                -- at most 3 extras count toward the target-selection bonus.
+                local distance = math.sqrt(distanceSquared(candidateHB.Position, root.Position))
+                local score = math.min(nearbyCount, 3) * 12 - distance
+                if score > bestScore then
+                    bestScore = score
+                    best = candidate
+                end
+            end
+        end
+    end
 
     local hb = best.hitbox
     local visual = best.visual
