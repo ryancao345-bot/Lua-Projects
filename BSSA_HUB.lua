@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.55"
-local HUB_BUILD = "Inspire Priority 3"
+local HUB_VERSION = "2.2.56"
+local HUB_BUILD = "FieldBox Token Boundaries"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -36,7 +36,6 @@ local Tokens = Debris:WaitForChild("Tokens")
 local Clouds = Workspace:WaitForChild("Clouds")
 
 local CFG = {
-    FieldRadius = 115,
     ReturnRadius = 95,
 
     TokenStay = 0.32,
@@ -851,7 +850,25 @@ local function recordTokenCollection(token)
     tokenMonitorRefresh()
 end
 
-local FIELD_RADIUS_SQ = CFG.FieldRadius ^ 2
+-- Token and honey-mark eligibility uses the selected field's actual footprint.
+-- Do not fall back to a radius if the field box is missing.
+local function activeFieldBox()
+    local name = State.sprout and State.sproutFieldName
+        or (State.farm and State.fieldName)
+    local fields = Workspace:FindFirstChild("Fields")
+    local field = name and fields and fields:FindFirstChild(name)
+    local box = field and field:FindFirstChild("FieldBox")
+    return box and box:IsA("BasePart") and box or nil
+end
+
+local function insideFieldBoxXZ(position, box)
+    if not box then return false end
+    local localPos = box.CFrame:PointToObjectSpace(position)
+    local half = box.Size * 0.5
+    return math.abs(localPos.X) <= half.X
+        and math.abs(localPos.Z) <= half.Z
+end
+
 local NEAR_TOKEN_SQ = 36
 
 local EXCLUDED_TOKENS = {
@@ -1063,9 +1080,11 @@ local function collectTokens(anchor)
 
     local now = os.clock()
     local best
-    local bestDistance = FIELD_RADIUS_SQ
+    local bestDistance = math.huge
     local bestPriority = -1
     local nearby = {}
+    local fieldBox = activeFieldBox()
+    if not fieldBox then return false end
 
     for token, data in pairs(tokenIndex) do
         if token.Parent == Tokens and tokenAllowed(token) then
@@ -1073,12 +1092,7 @@ local function collectTokens(anchor)
             local visual = data.visual
 
             if tokenAlive(hb, visual) then
-                local fieldDistance = distanceSquared(
-                    hb.Position,
-                    anchor.Position
-                )
-
-                if fieldDistance <= FIELD_RADIUS_SQ then
+                if insideFieldBoxXZ(hb.Position, fieldBox) then
                     nearby[#nearby + 1] = data
 
                     if (tokenCooldowns[hb] or 0) <= now then
@@ -1363,8 +1377,10 @@ end
 
 local function findHoneyMark(root)
     local closest
-    local closestDistance = FIELD_RADIUS_SQ
+    local closestDistance = math.huge
     local isPlate = false
+    local fieldBox = activeFieldBox()
+    if not fieldBox then return nil, false end
 
     for _, mark in ipairs(Debris:GetChildren()) do
         if mark.Name == "HoneyMark" then
@@ -1383,10 +1399,7 @@ local function findHoneyMark(root)
                     or mark:FindFirstChildWhichIsA("BasePart")
 
                 if part and part:IsA("BasePart") then
-                    if distanceSquared(
-                        part.Position,
-                        State.field.Position
-                    ) <= FIELD_RADIUS_SQ then
+                    if insideFieldBoxXZ(part.Position, fieldBox) then
 
                         local distance = distanceSquared(
                             part.Position,
@@ -1424,10 +1437,7 @@ local function handleHoneyMark()
         or not lockedMark:IsDescendantOf(Debris)
 
     if not invalid then
-        invalid = distanceSquared(
-            lockedMark.Position,
-            State.field.Position
-        ) > FIELD_RADIUS_SQ
+        invalid = not insideFieldBoxXZ(lockedMark.Position, activeFieldBox())
     end
 
     if invalid then
