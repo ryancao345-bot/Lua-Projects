@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.44"
-local HUB_BUILD = "Token Collection Statistics"
+local HUB_VERSION = "2.2.45"
+local HUB_BUILD = "Token Collection Monitor"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -801,12 +801,24 @@ local tokenIndex = {}
 local tokenAttempts = {}
 local tokenCooldowns = {}
 local tokenPending = {}
--- Count pickups observed after this script attempts to touch a token.
+-- Observed pickup monitor: token disappears shortly after our touch attempt.
+-- This is an estimate, not a server-confirmed pickup receipt.
 local tokenTouchedAt = {}
 local tokenCounted = {}
 local tokenCollectedTotal = 0
 local tokenCollectionTimes = {}
-local tokenStatsStart = nil
+local tokenRecent = {}
+local tokenByName = {}
+local tokenMonitorRefresh = function() end
+local tokenMonitorStarted = os.clock()
+
+local function tokenDisplayName(token)
+    local obj = token:FindFirstChild("TokenName", true)
+    local value = obj and obj:IsA("ValueBase") and obj.Value
+        or token:GetAttribute("TokenName")
+    local name = value and tostring(value):match("^%s*(.-)%s*$")
+    return (name and name ~= "") and name or "Unknown"
+end
 
 local function recordTokenCollection(token)
     if tokenCounted[token] then return end
@@ -815,8 +827,14 @@ local function recordTokenCollection(token)
     local touchedAt = hb and tokenTouchedAt[hb]
     if not touchedAt or os.clock() - touchedAt > 2 then return end
     tokenCounted[token] = true
+    local now = os.clock()
+    local name = tokenDisplayName(token)
     tokenCollectedTotal += 1
-    tokenCollectionTimes[#tokenCollectionTimes + 1] = os.clock()
+    tokenCollectionTimes[#tokenCollectionTimes + 1] = now
+    tokenByName[name] = (tokenByName[name] or 0) + 1
+    table.insert(tokenRecent, 1, {name=name, time=now})
+    if #tokenRecent > 60 then table.remove(tokenRecent) end
+    tokenMonitorRefresh()
 end
 
 local FIELD_RADIUS_SQ = CFG.FieldRadius ^ 2
@@ -2101,9 +2119,6 @@ end)
 
 local hphLabel = infoRow(farmLeft, "Honey / Hour: Off", 5)
 
-local tokensPerHourLabel = infoRow(homePanel, "Tokens / Hour: Off", 6)
-local tokensTotalLabel = infoRow(homePanel, "Tokens Collected: 0", 7)
-
 local conversionLabel = infoRow(farmLeft, "Hive Conversions: 0", 6)
 
 makeToggle(farmLeft, "Gumdrop Spam", 7, function(value)
@@ -3279,6 +3294,139 @@ makeButton(miscPanel, "Open Auto Royal Jelly UI", 11, function()
 end)
 infoRow(miscPanel, "Separate panel • Close without stopping rolls", 12)
 
+-- Token monitor: separate companion window, matching Auto Royal Jelly placement.
+local tokenWindow = create("Frame", {
+    Size=UDim2.fromOffset(365, 420),
+    BackgroundColor3=Color3.fromRGB(19,23,34),
+    BorderSizePixel=0, Visible=false, Active=true, Parent=gui
+}, 11)
+addStroke(tokenWindow)
+local tokenWindowShown = false
+local function positionTokenWindow()
+    local viewport = gui.AbsoluteSize
+    local x = main.AbsolutePosition.X + main.AbsoluteSize.X + 12
+    if x + 365 > viewport.X - 8 then x = main.AbsolutePosition.X - 377 end
+    x = math.clamp(x, 8, math.max(8, viewport.X - 373))
+    local y = math.clamp(main.AbsolutePosition.Y, 8, math.max(8, viewport.Y - 428))
+    tokenWindow.Position = UDim2.fromOffset(x, y)
+end
+local function showTokenWindow(show)
+    tokenWindowShown = show
+    if show then jellyOpen(false) end
+    tokenWindow.Visible = show and main.Visible
+    if tokenWindow.Visible then positionTokenWindow() end
+end
+connect(main:GetPropertyChangedSignal("AbsolutePosition"), positionTokenWindow)
+connect(main:GetPropertyChangedSignal("AbsoluteSize"), positionTokenWindow)
+connect(main:GetPropertyChangedSignal("Visible"), function()
+    tokenWindow.Visible = tokenWindowShown and main.Visible
+    if tokenWindow.Visible then positionTokenWindow() end
+end)
+local tokenTitle = create("TextLabel", {
+    Position=UDim2.fromOffset(14,8), Size=UDim2.fromOffset(290,32),
+    BackgroundTransparency=1, Text="TOKEN COLLECTION MONITOR",
+    TextColor3=THEME.Text, Font=FONT_BOLD, TextSize=14,
+    TextXAlignment=Enum.TextXAlignment.Left, Parent=tokenWindow
+})
+local tokenClose = create("TextButton", {
+    Position=UDim2.new(1,-43,0,10), Size=UDim2.fromOffset(28,26),
+    BackgroundColor3=THEME.Control, Text="×", TextSize=19,
+    TextColor3=THEME.Text, Font=FONT_BOLD, Parent=tokenWindow
+}, 5)
+connect(tokenClose.MouseButton1Click, function() showTokenWindow(false) end)
+local function monitorLabel(y, height, initial, size)
+    return create("TextLabel", {
+        Position=UDim2.fromOffset(14,y), Size=UDim2.fromOffset(337,height),
+        BackgroundTransparency=1, Text=initial, TextColor3=THEME.Text,
+        Font=FONT, TextSize=size or 12, TextXAlignment=Enum.TextXAlignment.Left,
+        TextYAlignment=Enum.TextYAlignment.Center, Parent=tokenWindow
+    })
+end
+local tokenTotalText = monitorLabel(44,23,"Observed pickups: 0")
+local tokenMinuteText = monitorLabel(68,23,"Last 60 seconds: 0")
+local tokenRateText = monitorLabel(92,23,"5-minute rate: Calculating...")
+local tokenElapsedText = monitorLabel(116,23,"Monitoring: 0s")
+local tokenNote = monitorLabel(142,28,"Estimates: disappeared after scripted touch",10)
+tokenNote.TextColor3 = THEME.Muted
+local tokenFeedTitle = monitorLabel(173,20,"RECENT PICKUPS (NEWEST FIRST)",11)
+tokenFeedTitle.Font=FONT_BOLD
+tokenFeedTitle.TextColor3=THEME.Accent
+local tokenFeed = create("ScrollingFrame", {
+    Position=UDim2.fromOffset(14,196), Size=UDim2.fromOffset(337,126),
+    BackgroundColor3=THEME.Control, BorderSizePixel=0,
+    ScrollBarThickness=3, CanvasSize=UDim2.new(),
+    AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=tokenWindow
+},5)
+create("UIPadding", {PaddingTop=UDim.new(0,5), PaddingLeft=UDim.new(0,8),
+    PaddingRight=UDim.new(0,8), PaddingBottom=UDim.new(0,5), Parent=tokenFeed})
+create("UIListLayout", {Padding=UDim.new(0,3), SortOrder=Enum.SortOrder.LayoutOrder,
+    Parent=tokenFeed})
+local tokenTopTitle = monitorLabel(327,20,"MOST COLLECTED",11)
+tokenTopTitle.Font=FONT_BOLD
+tokenTopTitle.TextColor3=THEME.Accent
+local tokenTopText = monitorLabel(349,58,"No observed pickups yet",11)
+tokenTopText.TextYAlignment=Enum.TextYAlignment.Top
+tokenTopText.TextWrapped=true
+local feedRows = {}
+for i=1,12 do
+    feedRows[i] = create("TextLabel", {
+        Size=UDim2.new(1,-4,0,18), LayoutOrder=i,
+        BackgroundTransparency=1, Text="", Visible=false,
+        Font=FONT, TextSize=11, TextColor3=THEME.Text,
+        TextXAlignment=Enum.TextXAlignment.Left, Parent=tokenFeed
+    })
+end
+local function updateTokenMonitor()
+    if not tokenWindowShown or not main.Visible then return end
+    local now = os.clock()
+    local n60, n300 = 0, 0
+    for i=#tokenCollectionTimes,1,-1 do
+        local age = now - tokenCollectionTimes[i]
+        if age <= 60 then n60 += 1 end
+        if age <= 300 then n300 += 1 else break end
+    end
+    local elapsed = now - tokenMonitorStarted
+    tokenTotalText.Text = "Observed pickups: " .. tostring(tokenCollectedTotal)
+    tokenMinuteText.Text = "Last 60 seconds: " .. tostring(n60)
+    tokenRateText.Text = elapsed >= 10
+        and ("5-minute rate: " .. tostring(math.floor(n300 / math.min(elapsed,300) * 3600 + .5)) .. "/hr")
+        or "5-minute rate: Calculating..."
+    tokenElapsedText.Text = "Monitoring: " .. tostring(math.floor(elapsed)) .. "s"
+    for i, row in ipairs(feedRows) do
+        local entry = tokenRecent[i]
+        row.Visible = entry ~= nil
+        if entry then
+            row.Text = string.format("%ds ago  •  %s", math.floor(now-entry.time), entry.name)
+        end
+    end
+    local sorted = {}
+    for name, count in pairs(tokenByName) do
+        sorted[#sorted+1] = {name=name, count=count}
+    end
+    table.sort(sorted, function(a,b)
+        if a.count == b.count then return a.name < b.name end
+        return a.count > b.count
+    end)
+    local top = {}
+    for i=1,math.min(3,#sorted) do
+        top[#top+1] = sorted[i].name .. " ×" .. sorted[i].count
+    end
+    tokenTopText.Text = #top > 0 and table.concat(top, "   |   ") or "No observed pickups yet"
+end
+tokenMonitorRefresh = updateTokenMonitor
+task.spawn(function()
+    while State.active do
+        task.wait(1)
+        updateTokenMonitor()
+    end
+end)
+heading(miscPanel, "TOKEN COLLECTION", 17)
+makeButton(miscPanel, "Open Token Collection Monitor", 18, function()
+    showTokenWindow(not tokenWindowShown)
+    updateTokenMonitor()
+end)
+infoRow(miscPanel, "Live pickup feed • Rates • Token breakdown", 19)
+
 heading(miscPanel, "FIELD DICE", 13)
 makeButton(miscPanel, "Use Field Dice", 14, function()
     local fields = Workspace:FindFirstChild("Fields")
@@ -3882,39 +4030,6 @@ task.spawn(function()
             hphLabel.Text = "Honey / Hour: Off"
         end
 
-        -- Use the same rolling 5-minute window as Honey / Hour.
-        if State.farm or State.sprout then
-            if not tokenStatsStart then
-                tokenStatsStart = now
-                table.clear(tokenCollectionTimes)
-            end
-            local cutoff = now - HONEY_RATE_WINDOW
-            local firstValid = 1
-            while firstValid <= #tokenCollectionTimes
-                and tokenCollectionTimes[firstValid] < cutoff do
-                firstValid += 1
-            end
-            if firstValid > 1 then
-                local remaining = {}
-                for i = firstValid, #tokenCollectionTimes do
-                    remaining[#remaining + 1] = tokenCollectionTimes[i]
-                end
-                tokenCollectionTimes = remaining
-            end
-            local duration = math.min(now - tokenStatsStart, HONEY_RATE_WINDOW)
-            if duration >= 10 then
-                tokensPerHourLabel.Text = "Tokens / Hour: "
-                    .. formatNumber(#tokenCollectionTimes / duration * 3600)
-            else
-                tokensPerHourLabel.Text = "Tokens / Hour: Calculating..."
-            end
-        else
-            tokenStatsStart = nil
-            table.clear(tokenCollectionTimes)
-            tokensPerHourLabel.Text = "Tokens / Hour: Off"
-        end
-        tokensTotalLabel.Text = "Tokens Collected: " .. formatNumber(tokenCollectedTotal)
-
         conversionLabel.Text = "Hive Conversions: " .. tostring(State.hiveConversions)
 
         if State.planterBusy then
@@ -4061,6 +4176,8 @@ cleanup = function()
     table.clear(tokenTouchedAt)
     table.clear(tokenCounted)
     table.clear(tokenCollectionTimes)
+    table.clear(tokenRecent)
+    table.clear(tokenByName)
 
     if gui and gui.Parent then
         gui:Destroy()
