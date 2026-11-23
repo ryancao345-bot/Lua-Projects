@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.46"
+local HUB_VERSION = "2.2.47"
 local HUB_BUILD = "Fix Local Register Limit"
 
 local Players = game:GetService("Players")
@@ -3294,6 +3294,7 @@ makeButton(miscPanel, "Open Auto Royal Jelly UI", 11, function()
 end)
 infoRow(miscPanel, "Separate panel • Close without stopping rolls", 12)
 
+do -- Isolate token monitor GUI locals to stay within Luau register limit.
 -- Token monitor: separate companion window, matching Auto Royal Jelly placement.
 local tokenWindow = create("Frame", {
     Size=UDim2.fromOffset(365, 420),
@@ -3426,6 +3427,8 @@ makeButton(miscPanel, "Open Token Collection Monitor", 18, function()
     updateTokenMonitor()
 end)
 infoRow(miscPanel, "Live pickup feed • Rates • Token breakdown", 19)
+
+end -- Token monitor GUI scope
 
 heading(miscPanel, "FIELD DICE", 13)
 makeButton(miscPanel, "Use Field Dice", 14, function()
@@ -4057,6 +4060,7 @@ end)
 end -- Honey statistics function
 startHoneyStats()
 
+do -- Drag handlers keep their state in a private scope.
 -- Dragging
 
 local dragging = false
@@ -4099,6 +4103,8 @@ connect(UIS.InputChanged, function(input)
         )
     end
 end)
+
+end -- Dragging scope
 
 -- Fast, modern window transition: no cinematic overlays or temporary GUI.
 -- UIScale scales the entire interface together, preventing stray fixed-size rows.
