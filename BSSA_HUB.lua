@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.43"
-local HUB_BUILD = "White Boost Token Priority"
+local HUB_VERSION = "2.2.44"
+local HUB_BUILD = "Token Collection Statistics"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -801,6 +801,23 @@ local tokenIndex = {}
 local tokenAttempts = {}
 local tokenCooldowns = {}
 local tokenPending = {}
+-- Count pickups observed after this script attempts to touch a token.
+local tokenTouchedAt = {}
+local tokenCounted = {}
+local tokenCollectedTotal = 0
+local tokenCollectionTimes = {}
+local tokenStatsStart = nil
+
+local function recordTokenCollection(token)
+    if tokenCounted[token] then return end
+    local data = tokenIndex[token]
+    local hb = data and data.hitbox
+    local touchedAt = hb and tokenTouchedAt[hb]
+    if not touchedAt or os.clock() - touchedAt > 2 then return end
+    tokenCounted[token] = true
+    tokenCollectedTotal += 1
+    tokenCollectionTimes[#tokenCollectionTimes + 1] = os.clock()
+end
 
 local FIELD_RADIUS_SQ = CFG.FieldRadius ^ 2
 local NEAR_TOKEN_SQ = 36
@@ -876,6 +893,7 @@ local function touchToken(hb)
     local root = getRoot()
     if not root then return end
 
+    tokenTouchedAt[hb] = os.clock()
     pcall(firetouchinterest, root, hb, false)
     pcall(firetouchinterest, root, hb, true)
 
@@ -912,7 +930,8 @@ local function registerToken(token)
 
     tokenIndex[token] = {
         hitbox = hb,
-        visual = visual
+        visual = visual,
+        token = token
     }
 
     tokenPending[token] = nil
@@ -921,13 +940,16 @@ end
 
 local function removeToken(token)
     local data = tokenIndex[token]
+    if data then recordTokenCollection(token) end
 
     if data then
         local hb = data.hitbox
         tokenAttempts[hb] = nil
         tokenCooldowns[hb] = nil
+        tokenTouchedAt[hb] = nil
     end
 
+    tokenCounted[token] = nil
     tokenIndex[token] = nil
     tokenPending[token] = nil
 end
@@ -960,9 +982,11 @@ task.spawn(function()
             end
         end
 
-        for token in pairs(tokenIndex) do
+        for token, data in pairs(tokenIndex) do
             if token.Parent ~= Tokens then
                 removeToken(token)
+            elseif not tokenAlive(data.hitbox, data.visual) then
+                recordTokenCollection(token)
             end
         end
 
@@ -1130,6 +1154,7 @@ local function collectTokens(anchor)
     end
 
     if collected or not tokenAlive(hb, visual) then
+        recordTokenCollection(best.token)
         tokenAttempts[hb] = nil
         tokenCooldowns[hb] = nil
     elseif not interrupted then
@@ -2075,6 +2100,9 @@ makeToggle(farmLeft, "Auto Dig", 4, function(value)
 end)
 
 local hphLabel = infoRow(farmLeft, "Honey / Hour: Off", 5)
+
+local tokensPerHourLabel = infoRow(homePanel, "Tokens / Hour: Off", 6)
+local tokensTotalLabel = infoRow(homePanel, "Tokens Collected: 0", 7)
 
 local conversionLabel = infoRow(farmLeft, "Hive Conversions: 0", 6)
 
@@ -3854,6 +3882,39 @@ task.spawn(function()
             hphLabel.Text = "Honey / Hour: Off"
         end
 
+        -- Use the same rolling 5-minute window as Honey / Hour.
+        if State.farm or State.sprout then
+            if not tokenStatsStart then
+                tokenStatsStart = now
+                table.clear(tokenCollectionTimes)
+            end
+            local cutoff = now - HONEY_RATE_WINDOW
+            local firstValid = 1
+            while firstValid <= #tokenCollectionTimes
+                and tokenCollectionTimes[firstValid] < cutoff do
+                firstValid += 1
+            end
+            if firstValid > 1 then
+                local remaining = {}
+                for i = firstValid, #tokenCollectionTimes do
+                    remaining[#remaining + 1] = tokenCollectionTimes[i]
+                end
+                tokenCollectionTimes = remaining
+            end
+            local duration = math.min(now - tokenStatsStart, HONEY_RATE_WINDOW)
+            if duration >= 10 then
+                tokensPerHourLabel.Text = "Tokens / Hour: "
+                    .. formatNumber(#tokenCollectionTimes / duration * 3600)
+            else
+                tokensPerHourLabel.Text = "Tokens / Hour: Calculating..."
+            end
+        else
+            tokenStatsStart = nil
+            table.clear(tokenCollectionTimes)
+            tokensPerHourLabel.Text = "Tokens / Hour: Off"
+        end
+        tokensTotalLabel.Text = "Tokens Collected: " .. formatNumber(tokenCollectedTotal)
+
         conversionLabel.Text = "Hive Conversions: " .. tostring(State.hiveConversions)
 
         if State.planterBusy then
@@ -3997,6 +4058,9 @@ cleanup = function()
     table.clear(tokenAttempts)
     table.clear(tokenCooldowns)
     table.clear(tokenPending)
+    table.clear(tokenTouchedAt)
+    table.clear(tokenCounted)
+    table.clear(tokenCollectionTimes)
 
     if gui and gui.Parent then
         gui:Destroy()
