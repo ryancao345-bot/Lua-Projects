@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.60"
-local HUB_BUILD = "Auto Royal Jelly Bee Confirmation"
+local HUB_VERSION = "2.2.61"
+local HUB_BUILD = "Auto Royal Jelly Tested Confirmation Engine"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3624,7 +3624,7 @@ local function jellyButton(text,y,height,color)
         Font=FONT_BOLD,TextSize=13,Parent=jellyWindow
     },7)
 end
-local jellyTitle = jellyText("AUTO ROYAL JELLY  •  V6.1",8,32,15)
+local jellyTitle = jellyText("AUTO ROYAL JELLY  •  V6.2",8,32,15)
 jellyTitle.Font=FONT_BOLD
 local jellyClose = create("TextButton", {
     Position=UDim2.new(1,-43,0,10),Size=UDim2.fromOffset(28,26),
@@ -3830,73 +3830,63 @@ connect(UIS.InputBegan, function(input, processed)
     jellyMessage("Slot selected. Verify before rolling.")
 end)
 
--- Preserve V5/V6.1 confirmation timing and behavior.
--- A delayed or temporarily unavailable GetData response should not end a roll.
--- Continue only after either consumption or a stable bee change is confirmed.
+-- Royal Jelly confirmation engine adapted from the successfully tested
+-- standalone diagnostic V2. Confirm a stable snapshot (three matching reads
+-- plus a separate verification) after EITHER inventory consumption or a bee
+-- change. A bee can remain the same even when jellies were consumed.
+-- Never issue another request when the previous result is uncertain.
 local function jellyAwaitRoll(slotName, oldAmount, oldBee, ticket)
     local deadline = os.clock() + 10
-    local lastBee, lastAmount, stable, consumed = nil,nil,0,false
-    local changedBee, changedStable = nil,0
+    local lastBee, lastAmount = nil, nil
+    local stable = 0
     local lastReadError = nil
+    local reads = 0
+
     while State.active and Jelly.running and Jelly.generation == ticket
         and os.clock() < deadline do
-        task.wait(0.12)
-        local bee,amount,err = jellyRead(slotName)
+        task.wait(0.2)
+        local bee, amount, err = jellyRead(slotName)
+        reads += 1
         if not State.active or not Jelly.running or Jelly.generation ~= ticket then
-            return nil,nil,"Stopped"
+            return nil, nil, "Stopped"
         end
+
         if err then
-            -- Retry transient GetData failures within the confirmation window.
             lastReadError = err
         else
             lastReadError = nil
-            -- The server can update the bee before the inventory snapshot reflects
-            -- consumption. A repeatedly confirmed bee change is an alternative
-            -- acknowledgement; never retry on an unchanged bee alone.
-            if bee ~= oldBee then
-                if bee == changedBee then changedStable += 1
-                else changedBee,changedStable = bee,1 end
-                if changedStable >= 3 then
-                    task.wait(0.2)
-                    local confirmBee,confirmAmount,confirmErr = jellyRead(slotName)
-                    if not confirmErr and confirmBee == bee then
-                        return confirmBee,confirmAmount,nil
-                    end
-                    changedStable = 0
-                end
-            else
-                changedBee,changedStable = nil,0
-            end
-            if amount < oldAmount then
-                consumed = true
+            local beeChanged = bee ~= oldBee
+            local jellyConsumed = amount < oldAmount
+            if beeChanged or jellyConsumed then
                 if bee == lastBee and amount == lastAmount then
                     stable += 1
                 else
                     stable = 1
                 end
-                lastBee, lastAmount = bee, amount
-                if stable >= 2 then
-                    task.wait(0.2)
-                    if not State.active or not Jelly.running or Jelly.generation ~= ticket then
-                        return nil,nil,"Stopped"
+
+                if stable >= 3 then
+                    task.wait(0.25)
+                    if not State.active or not Jelly.running
+                        or Jelly.generation ~= ticket then
+                        return nil, nil, "Stopped"
                     end
-                    local checkBee,checkAmount,checkErr = jellyRead(slotName)
-                    if not checkErr and checkAmount < oldAmount then
-                        if checkBee == bee and checkAmount == amount then
-                            return checkBee,checkAmount,nil
-                        end
-                        lastBee,lastAmount,stable = checkBee,checkAmount,1
-                    else
-                        -- Keep waiting; do not resend while the outcome is uncertain.
-                        stable = 0
+                    local checkBee, checkAmount, checkErr = jellyRead(slotName)
+                    if not checkErr and checkBee == bee and checkAmount == amount then
+                        return checkBee, checkAmount, nil
                     end
+                    stable = 0
                 end
+            else
+                stable = 0
             end
+            lastBee, lastAmount = bee, amount
         end
     end
-    if consumed then return nil,nil,"Result did not stabilize" end
-    if lastReadError then return nil,nil,"No roll confirmation (" .. lastReadError .. ")" end
-    return nil,nil,"No jelly consumption confirmed"
+
+    if lastReadError then
+        return nil, nil, "No roll confirmation (" .. lastReadError .. ")"
+    end
+    return nil, nil, "No stable roll confirmation after " .. reads .. " reads"
 end
 local function jellyHalt(message)
     Jelly.running = false
