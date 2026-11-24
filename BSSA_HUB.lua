@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.59"
-local HUB_BUILD = "Auto Royal Jelly Read Resilience"
+local HUB_VERSION = "2.2.60"
+local HUB_BUILD = "Auto Royal Jelly Bee Confirmation"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3832,10 +3832,11 @@ end)
 
 -- Preserve V5/V6.1 confirmation timing and behavior.
 -- A delayed or temporarily unavailable GetData response should not end a roll.
--- Never issue the next Royal Jelly request until consumption is confirmed.
-local function jellyAwaitRoll(slotName, oldAmount, ticket)
+-- Continue only after either consumption or a stable bee change is confirmed.
+local function jellyAwaitRoll(slotName, oldAmount, oldBee, ticket)
     local deadline = os.clock() + 10
     local lastBee, lastAmount, stable, consumed = nil,nil,0,false
+    local changedBee, changedStable = nil,0
     local lastReadError = nil
     while State.active and Jelly.running and Jelly.generation == ticket
         and os.clock() < deadline do
@@ -3849,6 +3850,23 @@ local function jellyAwaitRoll(slotName, oldAmount, ticket)
             lastReadError = err
         else
             lastReadError = nil
+            -- The server can update the bee before the inventory snapshot reflects
+            -- consumption. A repeatedly confirmed bee change is an alternative
+            -- acknowledgement; never retry on an unchanged bee alone.
+            if bee ~= oldBee then
+                if bee == changedBee then changedStable += 1
+                else changedBee,changedStable = bee,1 end
+                if changedStable >= 3 then
+                    task.wait(0.2)
+                    local confirmBee,confirmAmount,confirmErr = jellyRead(slotName)
+                    if not confirmErr and confirmBee == bee then
+                        return confirmBee,confirmAmount,nil
+                    end
+                    changedStable = 0
+                end
+            else
+                changedBee,changedStable = nil,0
+            end
             if amount < oldAmount then
                 consumed = true
                 if bee == lastBee and amount == lastAmount then
@@ -3935,12 +3953,16 @@ connect(jellyStart.MouseButton1Click, function()
             if not sent then jellyMessage("UseItem failed") break end
             Jelly.requests += 1
             jellyStatsUpdate()
-            local bee,newAmount,rollErr = jellyAwaitRoll(slotName,previousAmount,ticket)
+            local bee,newAmount,rollErr = jellyAwaitRoll(slotName,previousAmount,currentBee,ticket)
             if not State.active or not Jelly.running or Jelly.generation ~= ticket then break end
             if rollErr then jellyMessage("Stopped: " .. rollErr) break end
             local consumed = previousAmount - newAmount
-            if consumed <= 0 then jellyMessage("Unconfirmed roll. Stopped") break end
-            Jelly.used += consumed
+            -- A stable bee change also confirms a roll if inventory data lags.
+            -- Do not count an unobserved jelly consumption as zero-cost certainty.
+            if consumed <= 0 and bee == currentBee then
+                jellyMessage("Unconfirmed roll. Stopped") break
+            end
+            Jelly.used += math.max(0,consumed)
             previousAmount,currentBee = newAmount,bee
             jellyStatsUpdate()
             jellyUpdateSlot(currentBee)
