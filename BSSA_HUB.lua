@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.61"
-local HUB_BUILD = "Auto Royal Jelly Tested Confirmation Engine"
+local HUB_VERSION = "2.2.62"
+local HUB_BUILD = "Auto Royal Jelly Multi-Select"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3378,6 +3378,7 @@ end)
 -- ============================================================
 local Jelly = {
     running=false, selecting=false, slot=nil, hive=nil, face=nil,
+    selected={},
     target=nil, confirm=nil, generation=0, requests=0, used=0,
     status="Select a hive slot and target bee"
 }
@@ -3624,7 +3625,7 @@ local function jellyButton(text,y,height,color)
         Font=FONT_BOLD,TextSize=13,Parent=jellyWindow
     },7)
 end
-local jellyTitle = jellyText("AUTO ROYAL JELLY  •  V6.2",8,32,15)
+local jellyTitle = jellyText("AUTO ROYAL JELLY  •  V6.3",8,32,15)
 jellyTitle.Font=FONT_BOLD
 local jellyClose = create("TextButton", {
     Position=UDim2.new(1,-43,0,10),Size=UDim2.fromOffset(28,26),
@@ -3632,7 +3633,7 @@ local jellyClose = create("TextButton", {
     TextColor3=THEME.Text,Font=FONT_BOLD,Parent=jellyWindow
 },5)
 connect(jellyClose.MouseButton1Click,function() jellyOpen(false) end)
-local jellySelect = jellyButton("Select Hive Slot",46,36)
+local jellySelect = jellyButton("Select Hive Slots (Multi)",46,36)
 local jellySlotLabel = jellyText("Selected: None",87,40)
 jellyText("TARGET BEE",132,18,11)
 local jellyTargetButton = jellyButton("Choose a Bee  ▼",154,36,Color3.fromRGB(30,36,52))
@@ -3733,12 +3734,34 @@ connect(jellyTargetButton.MouseButton1Click,function()
     jellyListOpen(not jellyPopup.Visible)
     if jellyPopup.Visible then jellyRebuild() end
 end)
+local function jellyClearSelections()
+    for _, entry in ipairs(Jelly.selected) do
+        if entry.outline then entry.outline:Destroy() end
+    end
+    table.clear(Jelly.selected)
+    Jelly.slot, Jelly.hive, Jelly.face = nil, nil, nil
+    jellySlotLabel.Text = "Selected: None"
+    jellySelect.Text = "Select Hive Slots (Multi)"
+end
+local function jellySelectionLabel()
+    local count = #Jelly.selected
+    if count == 0 then
+        jellySlotLabel.Text = "Selected: None"
+    elseif count == 1 then
+        local entry = Jelly.selected[1]
+        jellySlotLabel.Text = "Selected: " .. entry.hive.Name .. "/" .. entry.slot.Name
+    else
+        jellySlotLabel.Text = "Selected: " .. count .. " hive slots (sequential)"
+    end
+end
 connect(jellySelect.MouseButton1Click,function()
     if Jelly.running then return end
-    Jelly.selecting=true
-    Jelly.confirm=nil
+    Jelly.selecting = not Jelly.selecting
+    Jelly.confirm = nil
     jellyListOpen(false)
-    jellyMessage("Click a cell in your hive")
+    jellySelect.Text = Jelly.selecting and "Done Selecting Slots" or "Select Hive Slots (Multi)"
+    jellyMessage(Jelly.selecting and "Click cells to add/remove; press Done when finished"
+        or ("Selected " .. #Jelly.selected .. " slots"))
 end)
 local function jellyRead(slotName)
     local remotes = RS:FindFirstChild("Remotes")
@@ -3776,9 +3799,7 @@ local function jellyHiveFromSlot(cell)
     end
 end
 local function jellyUpdateSlot(bee)
-    if Jelly.slot and Jelly.hive then
-        jellySlotLabel.Text = Jelly.hive.Name .. " / " .. Jelly.slot.Name .. ": " .. tostring(bee)
-    end
+    jellySelectionLabel()
 end
 connect(UIS.InputBegan, function(input, processed)
     if not State.active or not Jelly.selecting or processed then return end
@@ -3824,10 +3845,36 @@ connect(UIS.InputBegan, function(input, processed)
     end
     local bee,_,err = jellyRead(cell.Name)
     if err then jellyMessage(err) return end
+    for index, entry in ipairs(Jelly.selected) do
+        if entry.slot == cell then
+            if entry.outline then entry.outline:Destroy() end
+            table.remove(Jelly.selected,index)
+            Jelly.confirm = nil
+            jellySelectionLabel()
+            jellyMessage("Removed " .. cell.Name .. " (" .. #Jelly.selected .. " selected)")
+            return
+        end
+    end
+    if #Jelly.selected > 0 and Jelly.selected[1].hive ~= candidateHive then
+        jellyMessage("Select cells from the same hive")
+        return
+    end
+    local outline = Instance.new("Highlight")
+    outline.Name = "BSSA_RJ_Selected"
+    outline.Adornee = cell
+    outline.FillColor = Color3.fromRGB(65,180,255)
+    outline.OutlineColor = Color3.fromRGB(255,230,100)
+    outline.FillTransparency = 0.8
+    outline.OutlineTransparency = 0
+    outline.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    outline.Parent = cell
+    table.insert(Jelly.selected, {
+        slot=cell, hive=candidateHive, face=candidateFace, outline=outline
+    })
     Jelly.slot, Jelly.hive, Jelly.face = cell, candidateHive, candidateFace
-    Jelly.selecting, Jelly.confirm = false, nil
-    jellyUpdateSlot(bee)
-    jellyMessage("Slot selected. Verify before rolling.")
+    Jelly.confirm = nil
+    jellySelectionLabel()
+    jellyMessage("Added " .. cell.Name .. " (" .. #Jelly.selected .. " selected)")
 end)
 
 -- Royal Jelly confirmation engine adapted from the successfully tested
@@ -3890,8 +3937,10 @@ local function jellyAwaitRoll(slotName, oldAmount, oldBee, ticket)
 end
 local function jellyHalt(message)
     Jelly.running = false
+    Jelly.selecting = false
     Jelly.generation += 1
     Jelly.confirm = nil
+    jellyClearSelections()
     if message then jellyMessage(message) end
 end
 connect(jellyStop.MouseButton1Click, function()
@@ -3899,69 +3948,112 @@ connect(jellyStop.MouseButton1Click, function()
 end)
 connect(jellyStart.MouseButton1Click, function()
     if Jelly.running then return end
-    if not Jelly.slot or not Jelly.face or not Jelly.face.Parent then
-        jellyMessage("Select a hive slot first") return
+    if #Jelly.selected == 0 then
+        jellyMessage("Select at least one hive slot first") return
     end
     if not Jelly.target then jellyMessage("Choose a target bee first") return end
-    local current,amount,err = jellyRead(Jelly.slot.Name)
-    if err then jellyMessage(err) return end
-    if current == Jelly.target then jellyMessage("Already have " .. Jelly.target) return end
-    if amount <= 0 then jellyMessage("Out of Royal Jelly") return end
-    local signature = Jelly.hive.Name .. "/" .. Jelly.slot.Name .. "|" .. Jelly.target
+    local wanted = Jelly.target
+    local signatureParts = {}
+    for _, entry in ipairs(Jelly.selected) do
+        if not entry.slot.Parent or not entry.face.Parent then
+            jellyMessage("A selected hive slot disappeared") return
+        end
+        table.insert(signatureParts, entry.hive.Name .. "/" .. entry.slot.Name)
+    end
+    local signature = table.concat(signatureParts,",") .. "|" .. wanted
     if Jelly.confirm ~= signature then
         Jelly.confirm = signature
-        jellyMessage("Confirm " .. current .. " → " .. Jelly.target .. ": press Start again")
+        jellyMessage("Confirm " .. #Jelly.selected .. " slots → " .. wanted .. ": press Start again")
         return
     end
     Jelly.confirm, Jelly.selecting = nil, false
+    jellySelect.Text = "Select Hive Slots (Multi)"
     jellyListOpen(false)
     Jelly.running = true
     Jelly.generation += 1
     local ticket = Jelly.generation
-    local face = Jelly.face
-    local slotName = Jelly.slot.Name
-    local wanted = Jelly.target
+    local queue = {}
+    for _, entry in ipairs(Jelly.selected) do table.insert(queue,entry) end
     Jelly.requests, Jelly.used = 0,0
     jellyStatsUpdate()
     task.spawn(function()
-        local previousAmount, currentBee = amount, current
-        while State.active and Jelly.running and Jelly.generation == ticket do
-            if currentBee == wanted then
-                jellyMessage("SUCCESS! Got " .. wanted) break
+        local completed, aborted = 0, false
+        for index, entry in ipairs(queue) do
+            if not State.active or not Jelly.running or Jelly.generation ~= ticket then
+                aborted = true break
             end
-            if not face.Parent then jellyMessage("Slot disappeared. Stopped") break end
-            if previousAmount <= 0 then jellyMessage("Out of Royal Jelly") break end
-            jellyMessage("Rolling... Current: " .. currentBee)
-            local folder = RS:FindFirstChild("Remotes")
-            local useItem = folder and folder:FindFirstChild("UseItem")
-            if not useItem or not useItem:IsA("RemoteEvent") then
-                jellyMessage("UseItem unavailable") break
+            local slotName, face = entry.slot.Name, entry.face
+            if not face.Parent or not entry.slot.Parent then
+                jellyMessage("Slot disappeared: " .. slotName)
+                aborted = true break
             end
-            local sent = pcall(function()
-                useItem:FireServer("Royal Jelly",face,1)
-            end)
-            if not sent then jellyMessage("UseItem failed") break end
-            Jelly.requests += 1
-            jellyStatsUpdate()
-            local bee,newAmount,rollErr = jellyAwaitRoll(slotName,previousAmount,currentBee,ticket)
-            if not State.active or not Jelly.running or Jelly.generation ~= ticket then break end
-            if rollErr then jellyMessage("Stopped: " .. rollErr) break end
-            local consumed = previousAmount - newAmount
-            -- A stable bee change also confirms a roll if inventory data lags.
-            -- Do not count an unobserved jelly consumption as zero-cost certainty.
-            if consumed <= 0 and bee == currentBee then
-                jellyMessage("Unconfirmed roll. Stopped") break
+            local currentBee, previousAmount, readErr = jellyRead(slotName)
+            if readErr then
+                jellyMessage("Stopped on " .. slotName .. ": " .. readErr)
+                aborted = true break
             end
-            Jelly.used += math.max(0,consumed)
-            previousAmount,currentBee = newAmount,bee
-            jellyStatsUpdate()
-            jellyUpdateSlot(currentBee)
-            if currentBee == wanted then
-                jellyMessage("SUCCESS! Got " .. wanted) break
+            while State.active and Jelly.running and Jelly.generation == ticket do
+                if currentBee == wanted then break end
+                if not face.Parent then
+                    jellyMessage("Slot disappeared: " .. slotName)
+                    aborted = true break
+                end
+                if previousAmount <= 0 then
+                    jellyMessage("Out of Royal Jelly")
+                    aborted = true break
+                end
+                jellyMessage("Slot " .. index .. "/" .. #queue .. " (" .. slotName .. "): " .. currentBee)
+                local folder = RS:FindFirstChild("Remotes")
+                local useItem = folder and folder:FindFirstChild("UseItem")
+                if not useItem or not useItem:IsA("RemoteEvent") then
+                    jellyMessage("UseItem unavailable")
+                    aborted = true break
+                end
+                local sent = pcall(function()
+                    useItem:FireServer("Royal Jelly",face,1)
+                end)
+                if not sent then
+                    jellyMessage("UseItem failed")
+                    aborted = true break
+                end
+                Jelly.requests += 1
+                jellyStatsUpdate()
+                local bee, newAmount, rollErr = jellyAwaitRoll(
+                    slotName, previousAmount, currentBee, ticket)
+                if not State.active or not Jelly.running or Jelly.generation ~= ticket then
+                    aborted = true break
+                end
+                if rollErr then
+                    jellyMessage("Stopped on " .. slotName .. ": " .. rollErr)
+                    aborted = true break
+                end
+                local consumed = previousAmount - newAmount
+                if consumed <= 0 and bee == currentBee then
+                    jellyMessage("Unconfirmed roll on " .. slotName .. ". Stopped")
+                    aborted = true break
+                end
+                Jelly.used += math.max(0,consumed)
+                previousAmount, currentBee = newAmount, bee
+                jellyStatsUpdate()
+                task.wait(0.05)
             end
-            task.wait(0.05)
+            if aborted or not State.active or not Jelly.running
+                or Jelly.generation ~= ticket then break end
+            completed += 1
+            if entry.outline then
+                entry.outline:Destroy()
+                entry.outline = nil
+            end
+            jellyMessage("Completed " .. completed .. "/" .. #queue .. " slots")
         end
-        if Jelly.generation == ticket then Jelly.running = false end
+        if Jelly.generation == ticket then
+            Jelly.running = false
+            Jelly.selecting = false
+            if not aborted and completed == #queue then
+                jellyMessage("SUCCESS! All " .. completed .. " slots: " .. wanted)
+            end
+            jellyClearSelections()
+        end
     end)
 end)
 
