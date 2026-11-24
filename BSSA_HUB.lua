@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.56"
-local HUB_BUILD = "FieldBox Token Boundaries"
+local HUB_VERSION = "2.2.57"
+local HUB_BUILD = "Honey Tracker Source Guard"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3959,7 +3959,7 @@ local cachedHoney
 local function getHoney()
     if cachedHoney and cachedHoney.Parent then
         local amount = tonumber(cachedHoney.Value)
-        if amount then return amount end
+        if amount then return amount, cachedHoney end
     end
 
     cachedHoney = nil
@@ -3975,7 +3975,7 @@ local function getHoney()
 
                 if amount then
                     cachedHoney = value
-                    return amount
+                    return amount, value
                 end
             end
         end
@@ -3989,7 +3989,7 @@ local function getHoney()
 
             if amount then
                 cachedHoney = value
-                return amount
+                return amount, value
             end
         end
     end
@@ -4015,7 +4015,7 @@ local function getHoney()
                     return math.floor(
                         tonumber(number)
                         * (SUFFIX[suffix:lower()] or 1)
-                    )
+                    ), label
                 end
             end
         end
@@ -4025,7 +4025,11 @@ local function getHoney()
 end
 
 local sessionStart = os.clock()
-local previousHoney = getHoney()
+local previousHoney, previousHoneySource = getHoney()
+-- A zero at startup may be a temporary unloaded balance, not a true baseline.
+if not previousHoney or previousHoney <= 0 then
+    previousHoney = nil
+end
 local earnedHoney = 0
 
 -- Honey/hour uses a rolling window instead of a lifetime average.
@@ -4086,19 +4090,29 @@ task.spawn(function()
             elapsed % 60
         )
 
-        local currentHoney = getHoney()
+        local currentHoney, currentHoneySource = getHoney()
         local delta = 0
 
-        if currentHoney then
-            if previousHoney and currentHoney > previousHoney then
-                delta = currentHoney - previousHoney
-                earnedHoney = earnedHoney + delta
-            end
+        if currentHoney and currentHoney > 0 then
+            if currentHoneySource ~= previousHoneySource or not previousHoney then
+                -- A different ValueBase / GUI label, or an unloaded starting
+                -- balance, must establish a new baseline instead of counting
+                -- the player's entire existing balance as session earnings.
+                previousHoney = currentHoney
+                previousHoneySource = currentHoneySource
+            else
+                if currentHoney > previousHoney then
+                    delta = currentHoney - previousHoney
+                    earnedHoney = earnedHoney + delta
+                end
 
-            -- Spending lowers the balance but does not subtract from gross
-            -- honey earned. The next sample starts from the new balance.
-            previousHoney = currentHoney
+                -- Spending lowers the balance but does not subtract from gross
+                -- honey earned. The next valid sample uses the new balance.
+                previousHoney = currentHoney
+            end
         end
+        -- Ignore missing/zero readings: they can occur while the game's
+        -- honey data reloads, and must not reset the earnings baseline.
 
         honeyLabel.Text = "Honey Made: "
             .. formatNumber(earnedHoney)
