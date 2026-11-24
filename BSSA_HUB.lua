@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.57"
-local HUB_BUILD = "Honey Tracker Source Guard"
+local HUB_VERSION = "2.2.58"
+local HUB_BUILD = "Misc WalkSpeed Control"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3207,6 +3207,73 @@ makeDropdown(
         setStatus("Teleported to " .. name)
     end
 )
+
+-- WalkSpeed control: enforce the chosen speed while enabled, including after
+-- respawn or game-side speed changes such as Haste. Disabled means no writes.
+local walkSpeedEnabled = false
+local desiredWalkSpeed = 16
+
+heading(miscPanel, "WALK SPEED", 20)
+local walkSpeedRow = create("Frame", {
+    Size = UDim2.new(1, 0, 0, 35),
+    LayoutOrder = 21,
+    BackgroundColor3 = THEME.Control,
+    BorderSizePixel = 0,
+    Parent = miscPanel
+}, 4)
+create("TextLabel", {
+    Size = UDim2.new(0.55, -9, 1, 0),
+    Position = UDim2.fromOffset(9, 0),
+    BackgroundTransparency = 1,
+    Text = "Target WalkSpeed",
+    TextSize = 12,
+    Font = FONT,
+    TextColor3 = THEME.Text,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = walkSpeedRow
+})
+local walkSpeedInput = create("TextBox", {
+    Size = UDim2.new(0.39, 0, 0, 27),
+    Position = UDim2.new(0.60, 0, 0.5, -13),
+    BackgroundColor3 = THEME.Panel,
+    BorderSizePixel = 0,
+    Text = "16",
+    PlaceholderText = "Enter speed",
+    ClearTextOnFocus = false,
+    TextSize = 12,
+    Font = FONT,
+    TextColor3 = THEME.Text,
+    Parent = walkSpeedRow
+}, 4)
+local function applyWalkSpeed()
+    if not walkSpeedEnabled then return end
+    local character = Player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.Health > 0 and humanoid.WalkSpeed ~= desiredWalkSpeed then
+        humanoid.WalkSpeed = desiredWalkSpeed
+    end
+end
+connect(walkSpeedInput.FocusLost, function()
+    local speed = tonumber(walkSpeedInput.Text)
+    if not speed or speed ~= speed or speed == math.huge or speed == -math.huge or speed < 0 then
+        walkSpeedInput.Text = tostring(desiredWalkSpeed)
+        setStatus("Invalid WalkSpeed value")
+        return
+    end
+    desiredWalkSpeed = speed
+    walkSpeedInput.Text = tostring(speed)
+    applyWalkSpeed()
+end)
+makeToggle(miscPanel, "Enforce WalkSpeed", 22, function(enabled)
+    walkSpeedEnabled = enabled
+    applyWalkSpeed()
+end)
+task.spawn(function()
+    while State.active do
+        if walkSpeedEnabled then applyWalkSpeed() end
+        task.wait(0.1)
+    end
+end)
 
 heading(miscPanel, "HUB VERSION", 1)
 infoRow(miscPanel, "Version: V" .. HUB_VERSION, 2)
