@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.66"
-local HUB_BUILD = "Soldier Scope Tracker"
+local HUB_VERSION = "2.2.67"
+local HUB_BUILD = "Target Scopes"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -75,6 +75,7 @@ local CFG = {
 local State = {
     active = true,
     farm = false,
+    targetScopes = false,
     sprout = false,
     convert = false,
     autoInstantConvert = false,
@@ -1521,12 +1522,22 @@ local function farmStep()
     if State.busy or State.mobFarm then return end
     if handleClouds() then return end
     if handleHoneyMark() then return end
-    if collectTokens(anchor) then return end
+    if collectTokens(anchor) then
+        if State.targetScopes and State.farm and not State.sprout
+            and not State.busy and not State.mobFarm and State.scopeAnchor then
+            local destination = State.scopeAnchor()
+            if destination then teleport(destination) end
+        end
+        return
+    end
 
+    if State.targetScopes and State.farm and not State.sprout and State.scopeAnchor then
+        anchor = State.scopeAnchor() or anchor
+    end
     root = getRoot()
 
     if root
-        and distanceSquared(root.Position, anchor.Position) > 16 then
+        and distanceSquared(root.Position, anchor.Position) > (State.targetScopes and State.farm and not State.sprout and 0.25 or 16) then
         teleport(anchor)
     end
 end
@@ -2213,6 +2224,11 @@ makeToggle(farmLeft, "Gumdrop Spam", 7, function(value)
     State.autoGumdrop = value
 end)
 
+makeToggle(farmLeft, "Target Scopes", 8, function(value)
+    State.targetScopes = value
+    if State.resetScopeTarget then State.resetScopeTarget() end
+end)
+
 task.spawn(function()
     while State.active do
         if State.autoGumdrop and not State.planterBusy then
@@ -2233,7 +2249,7 @@ end)
 
 -- Manual instant converter controls (local estimated cooldowns).
 do
-    heading(farmLeft, "INSTANT CONVERTERS", 8)
+    heading(farmLeft, "INSTANT CONVERTERS", 9)
     local converters = {
         {name = "Instant Converter", label = "Converter 0"},
         {name = "Instant Converter1", label = "Converter 1"},
@@ -2265,12 +2281,12 @@ do
     end
     for i, item in ipairs(converters) do
         item.readyAt = 0
-        item.button = makeButton(farmLeft, item.label, 8 + i, function()
+        item.button = makeButton(farmLeft, item.label, 9 + i, function()
             useConverter(item)
         end)
         refresh(item)
     end
-    makeToggle(farmLeft, "Auto Instant Convert (99%)", 14, function(value)
+    makeToggle(farmLeft, "Auto Instant Convert (99%)", 15, function(value)
         State.autoInstantConvert = value
     end)
     task.spawn(function()
@@ -2293,7 +2309,7 @@ do
             task.wait(0.1)
         end
     end)
-    infoRow(farmLeft, "Cooldowns: local estimates", 13)
+    infoRow(farmLeft, "Cooldowns: local estimates", 14)
     task.spawn(function()
         while State.active do
             for _, item in ipairs(converters) do refresh(item) end
@@ -2306,10 +2322,10 @@ end
 do
     local boostEnabled = false
     local refreshAt = 90
-    local boostStatus = infoRow(farmLeft, "Spider Boost: Off", 21)
+    local boostStatus = infoRow(farmLeft, "Spider Boost: Off", 22)
 
-    heading(farmLeft, "SPIDER FIELD BOOST", 16)
-    makeToggle(farmLeft, "Auto Spider Boost", 17, function(value)
+    heading(farmLeft, "SPIDER FIELD BOOST", 17)
+    makeToggle(farmLeft, "Auto Spider Boost", 18, function(value)
         boostEnabled = value
         boostStatus.Text = value and "Spider Boost: Starting..." or "Spider Boost: Off"
     end)
@@ -2540,6 +2556,73 @@ do
     local field, addedConnection, removedConnection
     local count, area, elapsed = 0, 0, 0
     local last = os.clock()
+
+    -- Scope targeting is independent of the display and only runs when enabled.
+    local target, targetField, nextScore = nil, nil, 0
+    local radiusSquared = 100 -- 10 studs, horizontal cluster radius
+    State.resetScopeTarget = function()
+        target, targetField, nextScore = nil, nil, 0
+    end
+    State.scopeAnchor = function()
+        if not State.targetScopes or not State.farm or State.sprout then return nil end
+        local fields = Workspace:FindFirstChild("Fields")
+        local selected = fields and State.fieldName and fields:FindFirstChild(State.fieldName)
+        if not selected then return State.field end
+        if selected ~= targetField then
+            target, targetField, nextScore = nil, selected, 0
+        end
+        local function valid(part)
+            if not part or not part:IsDescendantOf(selected) then return false end
+            if selected == field then return flowers[part] ~= nil end
+            for _, obj in ipairs(part:GetDescendants()) do
+                if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then return true end
+            end
+            return false
+        end
+        local now = os.clock()
+        if (target and not valid(target)) or now >= nextScore then
+            local candidates, seen = {}, {}
+            if selected == field then
+                for part in pairs(flowers) do
+                    if valid(part) then candidates[#candidates + 1] = part end
+                end
+            else
+                for _, obj in ipairs(selected:GetDescendants()) do
+                    if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then
+                        local part = obj:FindFirstAncestor("FlowerPart")
+                        if part and part:IsA("BasePart") and not seen[part] then
+                            seen[part] = true
+                            candidates[#candidates + 1] = part
+                        end
+                    end
+                end
+            end
+            local function score(part)
+                local n = 0
+                for _, other in ipairs(candidates) do
+                    local d = part.Position - other.Position
+                    if d.X*d.X + d.Z*d.Z <= radiusSquared then n += 1 end
+                end
+                return n
+            end
+            local best, bestScore, bestDistance = nil, -1, math.huge
+            for _, part in ipairs(candidates) do
+                local n = score(part)
+                local d = distanceSquared(part.Position, State.field.Position)
+                if n > bestScore or (n == bestScore and d < bestDistance) then
+                    best, bestScore, bestDistance = part, n, d
+                end
+            end
+            if not valid(target) or (best and bestScore >= score(target) + 2) then
+                target = best
+            end
+            nextScore = now + 0.5
+        end
+        if not valid(target) then return State.field end
+        return CFrame.new(target.Position.X,
+            target.Position.Y + target.Size.Y * 0.5 + getStandOffset() - 0.5,
+            target.Position.Z)
+    end
 
     local function integrate()
         local now = os.clock()
