@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.65"
+local HUB_VERSION = "2.2.66"
 local HUB_BUILD = "Soldier Scope Tracker"
 
 local Players = game:GetService("Players")
@@ -2562,21 +2562,35 @@ do
         if obj.Name ~= "ToF_MarkFlower" or not obj:IsA("ParticleEmitter") or emitters[obj] then return end
         local flower = obj:FindFirstAncestor("FlowerPart")
         if not flower or not flower:IsA("BasePart") or not flower:IsDescendantOf(field) then return end
-        emitters[obj] = flower
+        emitters[obj] = {flower = flower, enabled = obj.Enabled}
+        obj.Enabled = false
+        obj:Clear()
         local entry = flowers[flower]
         if entry then
             entry.refs += 1
             return
         end
         integrate()
-        local box = Instance.new("Highlight")
+        local box = Instance.new("SurfaceGui")
         box.Name = "BSSA_Scope_Visual"
         box.Adornee = flower
-        box.FillColor = purple
-        box.OutlineColor = Color3.fromRGB(225, 120, 255)
-        box.FillTransparency = 0.55
-        box.OutlineTransparency = 0
-        box.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        box.Face = Enum.NormalId.Top
+        box.AlwaysOnTop = true
+        box.LightInfluence = 0
+        box.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+        box.CanvasSize = Vector2.new(100, 100)
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.fromScale(1, 1)
+        fill.BackgroundColor3 = purple
+        fill.BackgroundTransparency = 0.55
+        fill.BorderSizePixel = 0
+        fill.Parent = box
+        local stroke = Instance.new("UIStroke")
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Color = Color3.fromRGB(225, 120, 255)
+        stroke.Thickness = 5
+        stroke.Transparency = 0
+        stroke.Parent = fill
         box.Parent = flower
         flowers[flower] = {refs = 1, box = box}
         count += 1
@@ -2584,8 +2598,9 @@ do
     end
 
     local function remove(obj)
-        local flower = emitters[obj]
-        if not flower then return end
+        local record = emitters[obj]
+        if not record then return end
+        local flower = record.flower
         emitters[obj] = nil
         local entry = flowers[flower]
         if not entry then return end
@@ -2605,6 +2620,9 @@ do
         if removedConnection then removedConnection:Disconnect() end
         for _, entry in pairs(flowers) do entry.box:Destroy() end
         table.clear(flowers)
+        for obj, record in pairs(emitters) do
+            if obj.Parent then obj.Enabled = record.enabled end
+        end
         table.clear(emitters)
         count = 0
         field = nextField
@@ -2629,6 +2647,9 @@ do
         if addedConnection then addedConnection:Disconnect() end
         if removedConnection then removedConnection:Disconnect() end
         for _, entry in pairs(flowers) do entry.box:Destroy() end
+        for obj, record in pairs(emitters) do
+            if obj.Parent then obj.Enabled = record.enabled end
+        end
     end)
 end
 
