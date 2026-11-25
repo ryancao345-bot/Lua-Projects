@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.75"
+local HUB_VERSION = "2.2.76"
 local HUB_BUILD = "Honey Mark Ownership Fix"
 
 local Players = game:GetService("Players")
@@ -2581,33 +2581,48 @@ do
         if selected ~= targetField then
             target, targetField, nextScore = nil, selected, 0
         end
-        local function valid(part)
-            if not part or not part:IsDescendantOf(selected) then return false end
+        local function scopePriority(part)
+            if not part or not part:IsDescendantOf(selected) then return 0 end
             local y = part.Position.Y
             if y <= 84.0 then depleted[part] = true end
             if y >= 84.5 then depleted[part] = nil end
-            if depleted[part] then return false end
-            if selected == field then return flowers[part] ~= nil end
-            for _, obj in ipairs(part:GetDescendants()) do
-                if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then return true end
+            if depleted[part] then return 0 end
+            if field and selected:IsDescendantOf(field) then
+                local entries = flowers[part]
+                return entries and (entries.purple and 2 or entries.green and 1 or 0) or 0
             end
-            return false
+            local priority = 0
+            for _, obj in ipairs(part:GetDescendants()) do
+                if obj:IsA("ParticleEmitter") then
+                    if obj.Name == "ToF_MarkFlower" then return 2 end
+                    if obj.Name == "ToF_AscendedMarkFlower" then priority = 1 end
+                end
+            end
+            return priority
         end
+        local function valid(part) return scopePriority(part) > 0 end
         local now = os.clock()
         if (target and not valid(target)) or now >= nextScore then
             local candidates, seen = {}, {}
-            if selected == field then
-                for part in pairs(flowers) do
-                    if valid(part) then candidates[#candidates + 1] = part end
+            local highestPriority = 0
+            local function consider(part)
+                if not part or not part:IsA("BasePart") or seen[part] then return end
+                seen[part] = true
+                local priority = scopePriority(part)
+                if priority == 0 or priority < highestPriority then return end
+                if priority > highestPriority then
+                    table.clear(candidates)
+                    highestPriority = priority
                 end
+                candidates[#candidates + 1] = part
+            end
+            if field and selected:IsDescendantOf(field) then
+                for part in pairs(flowers) do consider(part) end
             else
                 for _, obj in ipairs(selected:GetDescendants()) do
-                    if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then
-                        local part = obj:FindFirstAncestor("FlowerPart")
-                        if part and part:IsA("BasePart") and not seen[part] and valid(part) then
-                            seen[part] = true
-                            candidates[#candidates + 1] = part
-                        end
+                    if (obj.Name == "ToF_MarkFlower" or obj.Name == "ToF_AscendedMarkFlower")
+                        and obj:IsA("ParticleEmitter") then
+                        consider(obj:FindFirstAncestor("FlowerPart"))
                     end
                 end
             end
@@ -2633,7 +2648,8 @@ do
                     best, bestTier, bestScore, bestDistance = part, t, n, d
                 end
             end
-            if not valid(target) or (best and (bestTier > tier(target)
+            if not valid(target) or (best and (highestPriority > scopePriority(target)
+                or bestTier > tier(target)
                 or (bestTier == tier(target) and bestScore >= score(target) + 2))) then
                 target = best
             end
