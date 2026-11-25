@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.72"
+local HUB_VERSION = "2.2.73"
 local HUB_BUILD = "Honey Mark Ownership Fix"
 
 local Players = game:GetService("Players")
@@ -2667,7 +2667,12 @@ do
         local flower = obj:FindFirstAncestor("FlowerPart")
         if not flower or not flower:IsA("BasePart") or not flower:IsDescendantOf(field) then return end
         local kind = green and "green" or "purple"
-        emitters[obj] = {flower = flower, kind = kind}
+        -- Local visual adjustment only; retain the original emitter lifetime.
+        local original = {Enabled = obj.Enabled, Rate = obj.Rate, Transparency = obj.Transparency}
+        obj.Enabled = true
+        obj.Rate = math.max(obj.Rate, 20)
+        obj.Transparency = NumberSequence.new(0)
+        emitters[obj] = {flower = flower, kind = kind, original = original}
         local entries = flowers[flower] or {}
         flowers[flower] = entries
         if entries[kind] then
@@ -2719,8 +2724,19 @@ do
         end
     end
 
+    local function restoreParticles()
+        for obj, record in pairs(emitters) do
+            if obj.Parent and record.original then
+                pcall(function()
+                    for property, value in pairs(record.original) do obj[property] = value end
+                end)
+            end
+        end
+    end
+
     local function bindField(nextField)
         integrate()
+        restoreParticles()
         if addedConnection then addedConnection:Disconnect() end
         if removedConnection then removedConnection:Disconnect() end
         for _, entries in pairs(flowers) do
@@ -2749,6 +2765,7 @@ do
             refresh()
             task.wait(0.25)
         end
+        restoreParticles()
         if addedConnection then addedConnection:Disconnect() end
         if removedConnection then removedConnection:Disconnect() end
         for _, entries in pairs(flowers) do
