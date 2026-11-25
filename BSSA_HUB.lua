@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.71"
+local HUB_VERSION = "2.2.72"
 local HUB_BUILD = "Honey Mark Ownership Fix"
 
 local Players = game:GetService("Players")
@@ -2562,6 +2562,7 @@ do
     local emitters, flowers = {}, {}
     local field, addedConnection, removedConnection
     local count, area, elapsed = 0, 0, 0
+    local greenCount = 0
     local last = os.clock()
 
     -- Scope targeting is independent of the display and only runs when enabled.
@@ -2654,64 +2655,66 @@ do
     end
 
     local function refresh()
-        currentLabel.Text = field and ("Current Active Scopes: " .. count)
+        currentLabel.Text = field and ("Purple: " .. count .. " | Green: " .. greenCount)
             or "Current Active Scopes: --"
-        averageLabel.Text = elapsed > 0 and string.format("Average Active Scopes: %.2f", area / elapsed)
+        averageLabel.Text = elapsed > 0 and string.format("Average Purple Scopes: %.2f", area / elapsed)
             or "Average Active Scopes: --"
     end
 
     local function add(obj)
-        if obj.Name ~= "ToF_MarkFlower" or not obj:IsA("ParticleEmitter") or emitters[obj] then return end
+        local green = obj.Name == "ToF_AscendedMarkFlower"
+        if (not green and obj.Name ~= "ToF_MarkFlower") or not obj:IsA("ParticleEmitter") or emitters[obj] then return end
         local flower = obj:FindFirstAncestor("FlowerPart")
         if not flower or not flower:IsA("BasePart") or not flower:IsDescendantOf(field) then return end
-        emitters[obj] = {flower = flower, enabled = obj.Enabled}
-        obj.Enabled = false
-        obj:Clear()
-        local entry = flowers[flower]
-        if entry then
-            entry.refs += 1
+        local kind = green and "green" or "purple"
+        emitters[obj] = {flower = flower, kind = kind}
+        local entries = flowers[flower] or {}
+        flowers[flower] = entries
+        if entries[kind] then
+            entries[kind].refs += 1
             return
         end
         integrate()
         local box = Instance.new("SurfaceGui")
-        box.Name = "BSSA_Scope_Visual"
+        box.Name = "BSSA_Scope_Visual_" .. kind
         box.Adornee = flower
         box.Face = Enum.NormalId.Top
         box.AlwaysOnTop = true
         box.LightInfluence = 0
+        box.ZOffset = green and 2 or 1
         box.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
         box.CanvasSize = Vector2.new(100, 100)
         local fill = Instance.new("Frame")
         fill.Size = UDim2.fromScale(1, 1)
-        fill.BackgroundColor3 = purple
-        fill.BackgroundTransparency = 0.55
+        fill.BackgroundColor3 = green and Color3.fromRGB(157,255,0) or purple
+        fill.BackgroundTransparency = green and 0.35 or 0.55
         fill.BorderSizePixel = 0
         fill.Parent = box
         local stroke = Instance.new("UIStroke")
         stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-        stroke.Color = Color3.fromRGB(225, 120, 255)
-        stroke.Thickness = 5
-        stroke.Transparency = 0
+        stroke.Color = green and Color3.fromRGB(12,12,12) or Color3.fromRGB(225,120,255)
+        stroke.Thickness = green and 8 or 5
         stroke.Parent = fill
         box.Parent = flower
-        flowers[flower] = {refs = 1, box = box}
-        count += 1
+        entries[kind] = {refs = 1, box = box}
+        if green then greenCount += 1 else count += 1 end
         refresh()
     end
 
     local function remove(obj)
         local record = emitters[obj]
         if not record then return end
-        local flower = record.flower
         emitters[obj] = nil
-        local entry = flowers[flower]
+        local entries = flowers[record.flower]
+        local entry = entries and entries[record.kind]
         if not entry then return end
         entry.refs -= 1
         if entry.refs == 0 then
             integrate()
             entry.box:Destroy()
-            flowers[flower] = nil
-            count -= 1
+            entries[record.kind] = nil
+            if not next(entries) then flowers[record.flower] = nil end
+            if record.kind == "green" then greenCount -= 1 else count -= 1 end
             refresh()
         end
     end
@@ -2720,13 +2723,13 @@ do
         integrate()
         if addedConnection then addedConnection:Disconnect() end
         if removedConnection then removedConnection:Disconnect() end
-        for _, entry in pairs(flowers) do entry.box:Destroy() end
-        table.clear(flowers)
-        for obj, record in pairs(emitters) do
-            if obj.Parent then obj.Enabled = record.enabled end
+        for _, entries in pairs(flowers) do
+            for _, entry in pairs(entries) do entry.box:Destroy() end
         end
+        table.clear(flowers)
         table.clear(emitters)
         count = 0
+        greenCount = 0
         field = nextField
         last = os.clock()
         if field then
@@ -2740,7 +2743,7 @@ do
     task.spawn(function()
         while State.active do
             local fields = Workspace:FindFirstChild("Fields")
-            local nextField = fields and fields:FindFirstChild("Spider Field")
+            local nextField = fields
             if nextField ~= field then bindField(nextField) end
             integrate()
             refresh()
@@ -2748,9 +2751,8 @@ do
         end
         if addedConnection then addedConnection:Disconnect() end
         if removedConnection then removedConnection:Disconnect() end
-        for _, entry in pairs(flowers) do entry.box:Destroy() end
-        for obj, record in pairs(emitters) do
-            if obj.Parent then obj.Enabled = record.enabled end
+        for _, entries in pairs(flowers) do
+            for _, entry in pairs(entries) do entry.box:Destroy() end
         end
     end)
 end
