@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.73"
+local HUB_VERSION = "2.2.74"
 local HUB_BUILD = "Honey Mark Ownership Fix"
 
 local Players = game:GetService("Players")
@@ -2669,9 +2669,9 @@ do
         local kind = green and "green" or "purple"
         -- Local visual adjustment only; retain the original emitter lifetime.
         local original = {Enabled = obj.Enabled, Rate = obj.Rate, Transparency = obj.Transparency}
-        obj.Enabled = true
-        obj.Rate = math.max(obj.Rate, 20)
-        obj.Transparency = NumberSequence.new(0)
+        obj.Enabled = false
+        obj.Transparency = NumberSequence.new(1)
+        obj:Clear()
         emitters[obj] = {flower = flower, kind = kind, original = original}
         local entries = flowers[flower] or {}
         flowers[flower] = entries
@@ -2697,8 +2697,8 @@ do
         fill.Parent = box
         local stroke = Instance.new("UIStroke")
         stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-        stroke.Color = green and Color3.fromRGB(12,12,12) or Color3.fromRGB(225,120,255)
-        stroke.Thickness = green and 8 or 5
+        stroke.Color = green and Color3.fromRGB(210,255,105) or Color3.fromRGB(225,120,255)
+        stroke.Thickness = 5
         stroke.Parent = fill
         box.Parent = flower
         entries[kind] = {refs = 1, box = box}
