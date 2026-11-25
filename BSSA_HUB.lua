@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.76"
-local HUB_BUILD = "Honey Mark Ownership Fix"
+local HUB_VERSION = "2.2.77"
+local HUB_BUILD = "Strict Scope Priority Fix"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2648,9 +2648,10 @@ do
                     best, bestTier, bestScore, bestDistance = part, t, n, d
                 end
             end
-            if not valid(target) or (best and (highestPriority > scopePriority(target)
-                or bestTier > tier(target)
-                or (bestTier == tier(target) and bestScore >= score(target) + 2))) then
+            local currentPriority = scopePriority(target)
+            if currentPriority == 0 or (best and (highestPriority > currentPriority
+                or (highestPriority == currentPriority and (bestTier > tier(target)
+                or (bestTier == tier(target) and bestScore >= score(target) + 2))))) then
                 target = best
             end
             nextScore = now + 0.5
