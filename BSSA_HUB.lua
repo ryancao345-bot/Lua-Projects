@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.64"
+local HUB_VERSION = "2.2.65"
 local HUB_BUILD = "Soldier Scope Tracker"
 
 local Players = game:GetService("Players")
@@ -2306,7 +2306,6 @@ end
 do
     local boostEnabled = false
     local refreshAt = 90
-    local reserve = 20
     local boostStatus = infoRow(farmLeft, "Spider Boost: Off", 21)
 
     heading(farmLeft, "SPIDER FIELD BOOST", 16)
@@ -2342,10 +2341,6 @@ do
     numberSetting("Refresh at (seconds)", 18, refreshAt, 15, 180, function(v)
         if v then refreshAt = v end
         return refreshAt
-    end)
-    numberSetting("Minimum dice reserve", 20, reserve, 0, 100000, function(v)
-        if v then reserve = v end
-        return reserve
     end)
 
     local function readBoost()
@@ -2384,8 +2379,8 @@ do
                     label = "Waiting for game data"
                 elseif stack >= 2 and seconds > refreshAt then
                     label = string.format("x2 active | %ds | %d dice", math.ceil(seconds), count)
-                elseif count <= reserve then
-                    label = string.format("Paused: %d dice (reserve %d)", count, reserve)
+                elseif count <= 0 then
+                    label = "Out of Field Dice"
                 else
                     label = stack >= 2 and "Refreshing x2" or ("Building x2 (stack " .. tostring(stack) .. ")")
                     if os.clock() >= nextRoll then
