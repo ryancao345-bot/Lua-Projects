@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.69"
+local HUB_VERSION = "2.2.71"
 local HUB_BUILD = "Honey Mark Ownership Fix"
 
 local Players = game:GetService("Players")
@@ -2566,6 +2566,7 @@ do
 
     -- Scope targeting is independent of the display and only runs when enabled.
     local target, targetField, nextScore = nil, nil, 0
+    local depleted = setmetatable({}, {__mode = "k"})
     local radiusSquared = 100 -- 10 studs, horizontal cluster radius
     State.resetScopeTarget = function()
         target, targetField, nextScore = nil, nil, 0
@@ -2580,6 +2581,10 @@ do
         end
         local function valid(part)
             if not part or not part:IsDescendantOf(selected) then return false end
+            local y = part.Position.Y
+            if y <= 84.0 then depleted[part] = true end
+            if y >= 84.5 then depleted[part] = nil end
+            if depleted[part] then return false end
             if selected == field then return flowers[part] ~= nil end
             for _, obj in ipairs(part:GetDescendants()) do
                 if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then return true end
@@ -2597,7 +2602,7 @@ do
                 for _, obj in ipairs(selected:GetDescendants()) do
                     if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then
                         local part = obj:FindFirstAncestor("FlowerPart")
-                        if part and part:IsA("BasePart") and not seen[part] then
+                        if part and part:IsA("BasePart") and not seen[part] and valid(part) then
                             seen[part] = true
                             candidates[#candidates + 1] = part
                         end
