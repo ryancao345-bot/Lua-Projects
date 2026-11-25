@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.63"
+local HUB_VERSION = "2.2.64"
 local HUB_BUILD = "Soldier Scope Tracker"
 
 local Players = game:GetService("Players")
@@ -2574,14 +2574,15 @@ do
             return
         end
         integrate()
-        local box = Instance.new("SelectionBox")
+        local box = Instance.new("Highlight")
         box.Name = "BSSA_Scope_Visual"
         box.Adornee = flower
-        box.Color3 = purple
-        box.SurfaceColor3 = purple
-        box.SurfaceTransparency = 0.75
-        box.LineThickness = 0.05
-        box.Parent = gui
+        box.FillColor = purple
+        box.OutlineColor = Color3.fromRGB(225, 120, 255)
+        box.FillTransparency = 0.55
+        box.OutlineTransparency = 0
+        box.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        box.Parent = flower
         flowers[flower] = {refs = 1, box = box}
         count += 1
         refresh()
