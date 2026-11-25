@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.68"
-local HUB_BUILD = "Target Scopes - Flower Tiers"
+local HUB_VERSION = "2.2.69"
+local HUB_BUILD = "Honey Mark Ownership Fix"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -1376,6 +1376,16 @@ local function handleClouds()
     return false
 end
 
+local function ownsHoneyMark(mark)
+    local owner = mark and mark:FindFirstChild("Owner")
+    return owner and owner:IsA("StringValue") and owner.Value == Player.Name
+end
+
+local function ownsLockedHoneyMark(part)
+    local mark = part and part:FindFirstAncestor("HoneyMark")
+    return mark and mark.Parent == Debris and ownsHoneyMark(mark)
+end
+
 local function findHoneyMark(root)
     local closest
     local closestDistance = math.huge
@@ -1385,13 +1395,7 @@ local function findHoneyMark(root)
 
     for _, mark in ipairs(Debris:GetChildren()) do
         if mark.Name == "HoneyMark" then
-            local owner = mark:FindFirstChild("Owner")
-
-            local allowed = not owner
-                or owner.Value == Player.Name
-                or owner.Value == ""
-
-            if allowed then
+            if ownsHoneyMark(mark) then
                 local plate = mark:FindFirstChild("Plate", true)
 
                 local part = (
@@ -1436,6 +1440,7 @@ local function handleHoneyMark()
     local invalid = not lockedMark
         or not lockedMark.Parent
         or not lockedMark:IsDescendantOf(Debris)
+        or not ownsLockedHoneyMark(lockedMark)
 
     if not invalid then
         invalid = not insideFieldBoxXZ(lockedMark.Position, activeFieldBox())
@@ -1460,7 +1465,9 @@ local function handleHoneyMark()
             or not State.farm
             or State.busy
             or State.mobFarm
-            or not lockedMark.Parent then
+            or not lockedMark
+            or not lockedMark.Parent
+            or not ownsLockedHoneyMark(lockedMark) then
             break
         end
 
