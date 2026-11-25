@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.67"
-local HUB_BUILD = "Target Scopes"
+local HUB_VERSION = "2.2.68"
+local HUB_BUILD = "Target Scopes - Flower Tiers"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2605,15 +2605,22 @@ do
                 end
                 return n
             end
-            local best, bestScore, bestDistance = nil, -1, math.huge
+            local function tier(part)
+                local amount = part and part:FindFirstChild("Amnt")
+                return amount and amount:IsA("IntValue") and amount.Value or 0
+            end
+            local best, bestTier, bestScore, bestDistance = nil, -1, -1, math.huge
             for _, part in ipairs(candidates) do
+                local t = tier(part)
                 local n = score(part)
                 local d = distanceSquared(part.Position, State.field.Position)
-                if n > bestScore or (n == bestScore and d < bestDistance) then
-                    best, bestScore, bestDistance = part, n, d
+                if t > bestTier or (t == bestTier and
+                    (n > bestScore or (n == bestScore and d < bestDistance))) then
+                    best, bestTier, bestScore, bestDistance = part, t, n, d
                 end
             end
-            if not valid(target) or (best and bestScore >= score(target) + 2) then
+            if not valid(target) or (best and (bestTier > tier(target)
+                or (bestTier == tier(target) and bestScore >= score(target) + 2))) then
                 target = best
             end
             nextScore = now + 0.5
