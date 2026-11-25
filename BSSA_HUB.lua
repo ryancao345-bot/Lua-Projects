@@ -9,7 +9,7 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.74"
+local HUB_VERSION = "2.2.75"
 local HUB_BUILD = "Honey Mark Ownership Fix"
 
 local Players = game:GetService("Players")
@@ -2563,6 +2563,7 @@ do
     local field, addedConnection, removedConnection
     local count, area, elapsed = 0, 0, 0
     local greenCount = 0
+    local trackedField
     local last = os.clock()
 
     -- Scope targeting is independent of the display and only runs when enabled.
@@ -2646,7 +2647,7 @@ do
 
     local function integrate()
         local now = os.clock()
-        if field then
+        if trackedField then
             local dt = now - last
             area += count * dt
             elapsed += dt
@@ -2655,8 +2656,7 @@ do
     end
 
     local function refresh()
-        currentLabel.Text = field and ("Purple: " .. count .. " | Green: " .. greenCount)
-            or "Current Active Scopes: --"
+        currentLabel.Text = "Purple: " .. (trackedField and tostring(count) or "--") .. " | Green: " .. greenCount
         averageLabel.Text = elapsed > 0 and string.format("Average Purple Scopes: %.2f", area / elapsed)
             or "Average Active Scopes: --"
     end
@@ -2702,7 +2702,8 @@ do
         stroke.Parent = fill
         box.Parent = flower
         entries[kind] = {refs = 1, box = box}
-        if green then greenCount += 1 else count += 1 end
+        if green then greenCount += 1
+        elseif trackedField and flower:IsDescendantOf(trackedField) then count += 1 end
         refresh()
     end
 
@@ -2719,7 +2720,8 @@ do
             entry.box:Destroy()
             entries[record.kind] = nil
             if not next(entries) then flowers[record.flower] = nil end
-            if record.kind == "green" then greenCount -= 1 else count -= 1 end
+            if record.kind == "green" then greenCount -= 1
+            elseif trackedField and record.flower:IsDescendantOf(trackedField) then count -= 1 end
             refresh()
         end
     end
@@ -2761,7 +2763,22 @@ do
             local fields = Workspace:FindFirstChild("Fields")
             local nextField = fields
             if nextField ~= field then bindField(nextField) end
-            integrate()
+            local selectedName = not State.mobFarm and (State.sprout and State.sproutFieldName or (State.farm and State.fieldName))
+            local selected = fields and selectedName and fields:FindFirstChild(selectedName) or nil
+            if selected ~= trackedField then
+                trackedField = selected
+                area, elapsed = 0, 0
+                last = os.clock()
+            else
+                integrate()
+            end
+            -- Recount from the existing visual index, including only purple scopes in the selected field.
+            count = 0
+            if trackedField then
+                for part, entries in pairs(flowers) do
+                    if entries.purple and part:IsDescendantOf(trackedField) then count += 1 end
+                end
+            end
             refresh()
             task.wait(0.25)
         end
