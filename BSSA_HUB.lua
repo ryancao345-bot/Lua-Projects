@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.77"
-local HUB_BUILD = "Strict Scope Priority Fix"
+local HUB_VERSION = "2.2.78"
+local HUB_BUILD = "Purple Scopes Only"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2562,7 +2562,6 @@ do
     local emitters, flowers = {}, {}
     local field, addedConnection, removedConnection
     local count, area, elapsed = 0, 0, 0
-    local greenCount = 0
     local trackedField
     local last = os.clock()
 
@@ -2581,48 +2580,33 @@ do
         if selected ~= targetField then
             target, targetField, nextScore = nil, selected, 0
         end
-        local function scopePriority(part)
-            if not part or not part:IsDescendantOf(selected) then return 0 end
+        local function valid(part)
+            if not part or not part:IsDescendantOf(selected) then return false end
             local y = part.Position.Y
             if y <= 84.0 then depleted[part] = true end
             if y >= 84.5 then depleted[part] = nil end
-            if depleted[part] then return 0 end
-            if field and selected:IsDescendantOf(field) then
-                local entries = flowers[part]
-                return entries and (entries.purple and 2 or entries.green and 1 or 0) or 0
-            end
-            local priority = 0
+            if depleted[part] then return false end
+            if field and selected:IsDescendantOf(field) then return flowers[part] ~= nil and flowers[part].purple ~= nil end
             for _, obj in ipairs(part:GetDescendants()) do
-                if obj:IsA("ParticleEmitter") then
-                    if obj.Name == "ToF_MarkFlower" then return 2 end
-                    if obj.Name == "ToF_AscendedMarkFlower" then priority = 1 end
-                end
+                if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then return true end
             end
-            return priority
+            return false
         end
-        local function valid(part) return scopePriority(part) > 0 end
         local now = os.clock()
         if (target and not valid(target)) or now >= nextScore then
             local candidates, seen = {}, {}
-            local highestPriority = 0
-            local function consider(part)
-                if not part or not part:IsA("BasePart") or seen[part] then return end
-                seen[part] = true
-                local priority = scopePriority(part)
-                if priority == 0 or priority < highestPriority then return end
-                if priority > highestPriority then
-                    table.clear(candidates)
-                    highestPriority = priority
-                end
-                candidates[#candidates + 1] = part
-            end
             if field and selected:IsDescendantOf(field) then
-                for part in pairs(flowers) do consider(part) end
+                for part in pairs(flowers) do
+                    if valid(part) then candidates[#candidates + 1] = part end
+                end
             else
                 for _, obj in ipairs(selected:GetDescendants()) do
-                    if (obj.Name == "ToF_MarkFlower" or obj.Name == "ToF_AscendedMarkFlower")
-                        and obj:IsA("ParticleEmitter") then
-                        consider(obj:FindFirstAncestor("FlowerPart"))
+                    if obj.Name == "ToF_MarkFlower" and obj:IsA("ParticleEmitter") then
+                        local part = obj:FindFirstAncestor("FlowerPart")
+                        if part and part:IsA("BasePart") and not seen[part] and valid(part) then
+                            seen[part] = true
+                            candidates[#candidates + 1] = part
+                        end
                     end
                 end
             end
@@ -2648,10 +2632,8 @@ do
                     best, bestTier, bestScore, bestDistance = part, t, n, d
                 end
             end
-            local currentPriority = scopePriority(target)
-            if currentPriority == 0 or (best and (highestPriority > currentPriority
-                or (highestPriority == currentPriority and (bestTier > tier(target)
-                or (bestTier == tier(target) and bestScore >= score(target) + 2))))) then
+            if not valid(target) or (best and (bestTier > tier(target)
+                or (bestTier == tier(target) and bestScore >= score(target) + 2))) then
                 target = best
             end
             nextScore = now + 0.5
@@ -2673,17 +2655,16 @@ do
     end
 
     local function refresh()
-        currentLabel.Text = "Purple: " .. (trackedField and tostring(count) or "--") .. " | Green: " .. greenCount
+        currentLabel.Text = "Current Purple Scopes: " .. (trackedField and tostring(count) or "--")
         averageLabel.Text = elapsed > 0 and string.format("Average Purple Scopes: %.2f", area / elapsed)
             or "Average Active Scopes: --"
     end
 
     local function add(obj)
-        local green = obj.Name == "ToF_AscendedMarkFlower"
-        if (not green and obj.Name ~= "ToF_MarkFlower") or not obj:IsA("ParticleEmitter") or emitters[obj] then return end
+        if obj.Name ~= "ToF_MarkFlower" or not obj:IsA("ParticleEmitter") or emitters[obj] then return end
         local flower = obj:FindFirstAncestor("FlowerPart")
         if not flower or not flower:IsA("BasePart") or not flower:IsDescendantOf(field) then return end
-        local kind = green and "green" or "purple"
+        local kind = "purple"
         -- Local visual adjustment only; retain the original emitter lifetime.
         local original = {Enabled = obj.Enabled, Rate = obj.Rate, Transparency = obj.Transparency}
         obj.Enabled = false
@@ -2703,24 +2684,23 @@ do
         box.Face = Enum.NormalId.Top
         box.AlwaysOnTop = true
         box.LightInfluence = 0
-        box.ZOffset = green and 2 or 1
+        box.ZOffset = 1
         box.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
         box.CanvasSize = Vector2.new(100, 100)
         local fill = Instance.new("Frame")
         fill.Size = UDim2.fromScale(1, 1)
-        fill.BackgroundColor3 = green and Color3.fromRGB(157,255,0) or purple
-        fill.BackgroundTransparency = green and 0.35 or 0.55
+        fill.BackgroundColor3 = purple
+        fill.BackgroundTransparency = 0.55
         fill.BorderSizePixel = 0
         fill.Parent = box
         local stroke = Instance.new("UIStroke")
         stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-        stroke.Color = green and Color3.fromRGB(210,255,105) or Color3.fromRGB(225,120,255)
+        stroke.Color = Color3.fromRGB(225,120,255)
         stroke.Thickness = 5
         stroke.Parent = fill
         box.Parent = flower
         entries[kind] = {refs = 1, box = box}
-        if green then greenCount += 1
-        elseif trackedField and flower:IsDescendantOf(trackedField) then count += 1 end
+        if trackedField and flower:IsDescendantOf(trackedField) then count += 1 end
         refresh()
     end
 
@@ -2737,8 +2717,7 @@ do
             entry.box:Destroy()
             entries[record.kind] = nil
             if not next(entries) then flowers[record.flower] = nil end
-            if record.kind == "green" then greenCount -= 1
-            elseif trackedField and record.flower:IsDescendantOf(trackedField) then count -= 1 end
+            if trackedField and record.flower:IsDescendantOf(trackedField) then count -= 1 end
             refresh()
         end
     end
@@ -2764,7 +2743,6 @@ do
         table.clear(flowers)
         table.clear(emitters)
         count = 0
-        greenCount = 0
         field = nextField
         last = os.clock()
         if field then
