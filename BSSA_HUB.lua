@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.62"
-local HUB_BUILD = "Auto Royal Jelly Multi-Select"
+local HUB_VERSION = "2.2.63"
+local HUB_BUILD = "Soldier Scope Tracker"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -2427,7 +2427,6 @@ end
 -- Visual-only token ESP: invisible, non-colliding sizing proxies keep the
 -- wireframe slightly larger than the real parts without changing game objects.
 do
-    local tokenESPEnabled = true
     local tokenBoxes = {}
     local espFolder = Instance.new("Folder")
     espFolder.Name = "BSSA_ESP_Visuals"
@@ -2480,10 +2479,6 @@ do
     end
 
     local function syncBoxes()
-        if not tokenESPEnabled then
-            clearBoxes()
-            return
-        end
         for _, token in ipairs(Tokens:GetChildren()) do
             if tokenEligible(token) then
                 local part = token:FindFirstChild("Token")
@@ -2511,16 +2506,9 @@ do
         end
     end
 
-    heading(miscPanel, "VISUAL ESP", 15)
-    local setTokenESP = makeToggle(miscPanel, "Token ESP (Red)", 16, function(value)
-        tokenESPEnabled = value
-        if not value then clearBoxes() end
-    end)
-    setTokenESP(true)
-
     -- Follow token rotation every rendered frame for smooth outlines.
     connect(RunService.RenderStepped, function()
-        if not State.active or not tokenESPEnabled then return end
+        if not State.active then return end
         for token, entry in pairs(tokenBoxes) do
             if token.Parent ~= Tokens or not entry.part:IsDescendantOf(token)
                 or not entry.proxy.Parent then
@@ -2543,6 +2531,108 @@ do
         end
         clearBoxes()
         espFolder:Destroy()
+    end)
+end
+
+-- Soldier Scope tracker: count distinct flowers, not individual emitters.
+do
+    heading(miscPanel, "SOLDIER SCOPE TRACKER", 23)
+    local currentLabel = infoRow(miscPanel, "Current Active Scopes: --", 24)
+    local averageLabel = infoRow(miscPanel, "Average Active Scopes: --", 25)
+
+    local purple = Color3.fromRGB(176, 38, 255)
+    local emitters, flowers = {}, {}
+    local field, addedConnection, removedConnection
+    local count, area, elapsed = 0, 0, 0
+    local last = os.clock()
+
+    local function integrate()
+        local now = os.clock()
+        if field then
+            local dt = now - last
+            area += count * dt
+            elapsed += dt
+        end
+        last = now
+    end
+
+    local function refresh()
+        currentLabel.Text = field and ("Current Active Scopes: " .. count)
+            or "Current Active Scopes: --"
+        averageLabel.Text = elapsed > 0 and string.format("Average Active Scopes: %.2f", area / elapsed)
+            or "Average Active Scopes: --"
+    end
+
+    local function add(obj)
+        if obj.Name ~= "ToF_MarkFlower" or not obj:IsA("ParticleEmitter") or emitters[obj] then return end
+        local flower = obj:FindFirstAncestor("FlowerPart")
+        if not flower or not flower:IsA("BasePart") or not flower:IsDescendantOf(field) then return end
+        emitters[obj] = flower
+        local entry = flowers[flower]
+        if entry then
+            entry.refs += 1
+            return
+        end
+        integrate()
+        local box = Instance.new("SelectionBox")
+        box.Name = "BSSA_Scope_Visual"
+        box.Adornee = flower
+        box.Color3 = purple
+        box.SurfaceColor3 = purple
+        box.SurfaceTransparency = 0.75
+        box.LineThickness = 0.05
+        box.Parent = gui
+        flowers[flower] = {refs = 1, box = box}
+        count += 1
+        refresh()
+    end
+
+    local function remove(obj)
+        local flower = emitters[obj]
+        if not flower then return end
+        emitters[obj] = nil
+        local entry = flowers[flower]
+        if not entry then return end
+        entry.refs -= 1
+        if entry.refs == 0 then
+            integrate()
+            entry.box:Destroy()
+            flowers[flower] = nil
+            count -= 1
+            refresh()
+        end
+    end
+
+    local function bindField(nextField)
+        integrate()
+        if addedConnection then addedConnection:Disconnect() end
+        if removedConnection then removedConnection:Disconnect() end
+        for _, entry in pairs(flowers) do entry.box:Destroy() end
+        table.clear(flowers)
+        table.clear(emitters)
+        count = 0
+        field = nextField
+        last = os.clock()
+        if field then
+            addedConnection = connect(field.DescendantAdded, add)
+            removedConnection = connect(field.DescendantRemoving, remove)
+            for _, obj in ipairs(field:GetDescendants()) do add(obj) end
+        end
+        refresh()
+    end
+
+    task.spawn(function()
+        while State.active do
+            local fields = Workspace:FindFirstChild("Fields")
+            local nextField = fields and fields:FindFirstChild("Spider Field")
+            if nextField ~= field then bindField(nextField) end
+            integrate()
+            refresh()
+            task.wait(0.25)
+        end
+        if addedConnection then addedConnection:Disconnect() end
+        if removedConnection then removedConnection:Disconnect() end
+        for _, entry in pairs(flowers) do entry.box:Destroy() end
     end)
 end
 
