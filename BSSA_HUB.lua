@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.81"
-local HUB_BUILD = "Planter Harvest Fix"
+local HUB_VERSION = "2.2.82"
+local HUB_BUILD = "Planter Reward Filter"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3131,7 +3131,9 @@ do
             for _, token in ipairs(Tokens:GetChildren()) do
                 -- Only freshly spawned, player-specific tokens near the harvested
                 -- planter. Do not use the autofarm's item exclusion filter here.
-                if token.Name == Player.Name and not previousTokens[token] then
+                local bee = token:FindFirstChild("Bee")
+                if token.Name == Player.Name and not previousTokens[token]
+                    and bee and bee:IsA("ObjectValue") and bee.Value == nil then
                     local hb, visual = tokenParts(token)
                     if tokenAlive(hb, visual)
                         and distanceSquared(hb.Position, origin) <= collectionRadiusSq
