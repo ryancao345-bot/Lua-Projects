@@ -2955,7 +2955,8 @@ do
     local inventory, inventoryAt = nil, -math.huge
     local retrySeconds = 20
     local collectionSeconds = 10
-    local harvestSafetySeconds = 5
+    local harvestSafetySeconds = 10
+    local harvestRetrySeconds = 5
     local collectionRadiusSq = 35 * 35
     local function planterValue(model, name)
         local obj = model:FindFirstChild(name)
@@ -3156,6 +3157,46 @@ do
             end
         end
     end
+    -- Require a continuous settled interval on a real surface before using
+    -- a consumable. Do not force the character down while physics is settling.
+    local function settlePlanterPosition(item, cf, box, requireGround)
+        local deadline = os.clock() + 5
+        local stableSince, stableRoot, stablePosition
+        while State.active and item.enabled and os.clock() < deadline do
+            local root = getRoot()
+            local character = Player.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if not root or not humanoid or humanoid.Health <= 0 then return false end
+            local pos = root.Position
+            local valid = distanceSquared(pos, cf.Position) <= 16
+                and root.AssemblyLinearVelocity.Magnitude <= 2
+            if requireGround then
+                valid = valid and box and box.Parent
+                    and insideFieldBoxXZ(pos, box)
+                    and humanoid.FloorMaterial ~= Enum.Material.Air
+                if valid then
+                    local params = RaycastParams.new()
+                    params.FilterType = Enum.RaycastFilterType.Exclude
+                    params.FilterDescendantsInstances = {character}
+                    params.RespectCanCollide = true
+                    local hit = Workspace:Raycast(pos, Vector3.new(0, -(getStandOffset() + 2), 0), params)
+                    valid = hit ~= nil and hit.Normal.Y >= 0.5
+                end
+            end
+            if valid then
+                if stableRoot ~= root or not stablePosition
+                    or distanceSquared(pos, stablePosition) > 0.25 then
+                    stableSince, stableRoot, stablePosition = os.clock(), root, pos
+                elseif os.clock() - stableSince >= 1 then
+                    return true
+                end
+            else
+                stableSince, stableRoot, stablePosition = nil, nil, nil
+            end
+            task.wait(0.1)
+        end
+        return false
+    end
     local function place(item)
         if not item.enabled or not State.active or not getRoot() then return end
         local _, status = scanPlanter(item)
@@ -3172,26 +3213,32 @@ do
         end
         local remotes = RS:FindFirstChild("Remotes")
         local remote = remotes and remotes:FindFirstChild("UseItem")
-        if not cf or not box or not remote or not remote:IsA("RemoteEvent") then
+        if not cf or not box or not box:IsA("BasePart") or not remote or not remote:IsA("RemoteEvent") then
             item.status, item.retryAt = "Placement unavailable", os.clock() + retrySeconds
             return
         end
         item.status = "Planting"
         setStatus("Planters: Planting " .. item.name)
         if not teleport(cf) then return end
-        task.wait(0.25)
+        if not settlePlanterPosition(item, cf, box, true) then
+            item.status, item.retryAt = "Waiting for stable ground", os.clock() + retrySeconds
+            return
+        end
         if not State.active or not item.enabled or not getRoot() then return end
+        if (inventoryAmount(item.name) or 0) <= 0 then return end
         local _, checkStatus = scanPlanter(item)
         if checkStatus ~= "Not planted" then return end
         local root = getRoot()
-        if not root or distanceSquared(root.Position, cf.Position) > 100 then
+        if not root or not box.Parent or not insideFieldBoxXZ(root.Position, box)
+            or distanceSquared(root.Position, cf.Position) > 16 then
             item.status, item.retryAt = "Placement position changed", os.clock() + retrySeconds
             return
         end
         local sent = pcall(function() remote:FireServer(item.name, box) end)
         if sent and waitFor(4, function()
             local model, currentStatus = scanPlanter(item)
-            return model ~= nil and currentStatus ~= "Planter is placed in another field"
+            return model ~= nil and planterValue(model, "Field") == item.field
+                and currentStatus ~= "Planter is placed in another field"
         end) then
             item.status, item.retryAt = "Planted", 0
         else
@@ -3212,7 +3259,10 @@ do
         item.status = "Harvesting"
         setStatus("Planters: Harvesting " .. item.name)
         if not teleport(cf) then return end
-        task.wait(0.25)
+        if not settlePlanterPosition(item, cf, nil, false) then
+            item.status, item.retryAt = "Harvest position unstable", os.clock() + harvestRetrySeconds
+            return
+        end
         if not State.active or not item.enabled or not getRoot() then return end
         -- Revalidate identity, exact field and exact 100% immediately before
         -- sending the claim. No fixed timer is ever allowed to trigger it.
@@ -3220,8 +3270,8 @@ do
         if current ~= model or status ~= "Ready to harvest" or level ~= 100 then return end
         if not soil.Parent then return end
         local root = getRoot()
-        if not root or distanceSquared(root.Position, cf.Position) > 100 then
-            item.status, item.retryAt = "Harvest position changed", os.clock() + retrySeconds
+        if not root or distanceSquared(root.Position, cf.Position) > 16 then
+            item.status, item.retryAt = "Harvest position changed", os.clock() + harvestRetrySeconds
             return
         end
         local previousTokens = {}
@@ -3230,7 +3280,7 @@ do
         if not sent or not waitFor(4, function()
             return not model:IsDescendantOf(Workspace)
         end) then
-            item.status, item.retryAt = "Harvest not confirmed", os.clock() + retrySeconds
+            item.status, item.retryAt = "Harvest not confirmed", os.clock() + harvestRetrySeconds
             return
         end
         item.harvested += 1
