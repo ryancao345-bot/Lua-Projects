@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.78"
-local HUB_BUILD = "Purple Scopes Only"
+local HUB_VERSION = "2.2.79"
+local HUB_BUILD = "Planter Reliability Fixes"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
