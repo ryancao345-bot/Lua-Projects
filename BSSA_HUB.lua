@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.79"
-local HUB_BUILD = "Planter Reliability Fixes"
+local HUB_VERSION = "2.2.80"
+local HUB_BUILD = "Planter Harvest Diagnostics"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3246,11 +3246,17 @@ do
         end
     end
     local function harvest(item, model)
-        if not item.enabled or not State.active or not getRoot() then return end
+        local started = os.clock()
+        local function debugHarvest(message)
+            print(string.format("[Planter Debug] %s +%.2fs | %s", item.name, os.clock() - started, message))
+        end
+        debugHarvest("Attempt started")
+        if not item.enabled or not State.active or not getRoot() then debugHarvest("Initial state invalid") return end
         local soil = planterSoil(model)
         local remotes = RS:FindFirstChild("Remotes")
         local remote = remotes and remotes:FindFirstChild("ClaimPlanter")
         if not soil or not remote or not remote:IsA("RemoteEvent") then
+            debugHarvest("Soil or ClaimPlanter remote unavailable")
             item.status, item.retryAt = "Harvest unavailable", os.clock() + retrySeconds
             return
         end
@@ -3258,31 +3264,40 @@ do
         local cf = CFrame.new(origin.X, origin.Y + soil.Size.Y * 0.5 + getStandOffset(), origin.Z)
         item.status = "Harvesting"
         setStatus("Planters: Harvesting " .. item.name)
-        if not teleport(cf) then return end
+        if not teleport(cf) then debugHarvest("Teleport failed") return end
+        debugHarvest("Teleport succeeded; checking stability")
         if not settlePlanterPosition(item, cf, nil, false) then
+            debugHarvest("Stability FAILED; remote not fired")
             item.status, item.retryAt = "Harvest position unstable", os.clock() + harvestRetrySeconds
             return
         end
-        if not State.active or not item.enabled or not getRoot() then return end
+        debugHarvest("Stability passed")
+        if not State.active or not item.enabled or not getRoot() then debugHarvest("State invalid after settling") return end
         -- Revalidate identity, exact field and exact 100% immediately before
         -- sending the claim. No fixed timer is ever allowed to trigger it.
         local current, status, level = scanPlanter(item)
-        if current ~= model or status ~= "Ready to harvest" or level ~= 100 then return end
-        if not soil.Parent then return end
+        debugHarvest(string.format("Validation: sameModel=%s status=%s level=%s", tostring(current == model), tostring(status), tostring(level)))
+        if current ~= model or status ~= "Ready to harvest" or level ~= 100 then debugHarvest("Validation FAILED; remote not fired") return end
+        if not soil.Parent then debugHarvest("Soil removed; remote not fired") return end
         local root = getRoot()
         if not root or distanceSquared(root.Position, cf.Position) > 16 then
+            debugHarvest("Distance check FAILED; remote not fired")
             item.status, item.retryAt = "Harvest position changed", os.clock() + harvestRetrySeconds
             return
         end
         local previousTokens = {}
         for _, token in ipairs(Tokens:GetChildren()) do previousTokens[token] = true end
+        debugHarvest("Distance check passed; firing ClaimPlanter")
         local sent = pcall(function() remote:FireServer(item.name) end)
+        debugHarvest("FireServer local success=" .. tostring(sent))
         if not sent or not waitFor(4, function()
             return not model:IsDescendantOf(Workspace)
         end) then
+            debugHarvest("Harvest NOT confirmed")
             item.status, item.retryAt = "Harvest not confirmed", os.clock() + harvestRetrySeconds
             return
         end
+        debugHarvest("Harvest confirmed")
         item.harvested += 1
         item.status = "Collecting rewards"
         setStatus("Planters: Collecting " .. item.name .. " rewards")
