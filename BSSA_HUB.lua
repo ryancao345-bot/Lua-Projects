@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.82"
-local HUB_BUILD = "Planter Reward Filter"
+local HUB_VERSION = "2.2.83"
+local HUB_BUILD = "Auto Treat Dispenser"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -3661,6 +3661,37 @@ task.spawn(function()
         task.wait(CFG.SproutInterval)
     end
 end)
+
+-- Auto Treat Dispenser: one independent worker, no movement required.
+do
+    local enabled = false
+    local nextRequest = 0
+    local function requestTreats()
+        local remotes = RS:FindFirstChild("Remotes")
+        local machine = remotes and remotes:FindFirstChild("UseMachine")
+        if machine and machine:IsA("RemoteEvent") then
+            pcall(function()
+                machine:FireServer("Treat Dispenser", 0)
+            end)
+        end
+    end
+    makeToggle(miscPanel, "Auto Treat Dispenser", 15, function(value)
+        enabled = value
+        if enabled and State.active then
+            nextRequest = os.clock() + 60
+            requestTreats()
+        end
+    end)
+    task.spawn(function()
+        while State.active do
+            if enabled and os.clock() >= nextRequest then
+                nextRequest = os.clock() + 60
+                requestTreats()
+            end
+            task.wait(0.2)
+        end
+    end)
+end
 
 -- ============================================================
 -- MISC: AUTO ROYAL JELLY (V6.1 ROLLING ENGINE)
