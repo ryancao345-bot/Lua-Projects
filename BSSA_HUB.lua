@@ -9,8 +9,8 @@
 -- PART 1: SERVICES, CONFIGURATION & STATE
 -- ============================================================
 
-local HUB_VERSION = "2.2.83"
-local HUB_BUILD = "Auto Treat Dispenser"
+local HUB_VERSION = "2.2.84"
+local HUB_BUILD = "Glitch Challenge"
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -1836,12 +1836,12 @@ end
 
 local function addTab(name, order)
     local button = create("TextButton", {
-        Size = UDim2.new(1, 0, 0, 34),
+        Size = UDim2.new(1, 0, 0, 30),
         LayoutOrder = order,
         BackgroundColor3 = THEME.Sidebar,
         AutoButtonColor = false,
         Text = "   " .. name,
-        TextSize = 12,
+        TextSize = name == "Glitch Challenge" and 10 or 12,
         Font = FONT,
         TextColor3 = THEME.Muted,
         TextXAlignment = Enum.TextXAlignment.Left,
@@ -1882,6 +1882,7 @@ local farmPage = addTab("Farming", 2)
 local mobPage = addTab("Mob Farm", 3)
 local tpPage = addTab("Teleports", 5)
 local miscPage = addTab("Misc", 6)
+local glitchPage = addTab("Glitch Challenge", 7)
 
 switchTab("Home")
 
@@ -2060,6 +2061,86 @@ local function makeToggle(parent, title, order, callback)
     end)
 
     return set
+end
+
+-- Glitch Challenge: independent controls, no field anchor required.
+do
+    local panel = makePanel(glitchPage)
+    local links, stingers = false, false
+    local generation, nextStinger = 0, 0
+    local retry = setmetatable({}, {__mode = "k"})
+    heading(panel, "GLITCH CHALLENGE", 1)
+    makeToggle(panel, "Token Link Collect", 2, function(value)
+        links = value
+        generation += 1
+        table.clear(retry)
+    end)
+    makeToggle(panel, "Auto Stinger", 3, function(value)
+        stingers = value
+        nextStinger = 0
+    end)
+    local status = infoRow(panel, "Stinger: Off", 4)
+    local function available()
+        return State.active and links and not State.farm and not State.sprout
+            and not State.mobFarm and not State.busy and not State.planterBusy
+    end
+    task.spawn(function()
+        while State.active do
+            task.wait(0.1)
+            if available() then
+                local ok, err = pcall(function()
+                    local root = getRoot()
+                    if not root then return end
+                    local best, distance = nil, math.huge
+                    for token, data in pairs(tokenIndex) do
+                        if token.Parent == Tokens and tokenAllowed(token)
+                            and tokenDisplayName(token):lower() == "token link"
+                            and tokenAlive(data.hitbox, data.visual)
+                            and (retry[token] or 0) <= os.clock() then
+                            local d = distanceSquared(root.Position, data.hitbox.Position)
+                            if d < distance then best, distance = data, d end
+                        end
+                    end
+                    if not best then return end
+                    local ticket = generation
+                    local deadline = os.clock() + 0.35
+                    repeat
+                        if not available() or generation ~= ticket or getRoot() ~= root
+                            or not tokenAlive(best.hitbox, best.visual) then break end
+                        if not teleport(best.hitbox.CFrame) then break end
+                        touchToken(best.hitbox)
+                        RunService.Heartbeat:Wait()
+                    until os.clock() >= deadline
+                    if tokenAlive(best.hitbox, best.visual) then
+                        retry[best.token] = os.clock() + 0.8
+                    end
+                end)
+                if not ok then warn("[BSSA] Glitch Link:", err) end
+            end
+        end
+    end)
+    task.spawn(function()
+        while State.active do
+            if stingers then
+                local now = os.clock()
+                if now >= nextStinger then
+                    nextStinger = now + 30
+                    local folder = RS:FindFirstChild("Remotes")
+                    local remote = folder and folder:FindFirstChild("UseItem")
+                    if remote and remote:IsA("RemoteEvent") then
+                        local ok, err = pcall(function() remote:FireServer("Stinger") end)
+                        if not ok then warn("[BSSA] Stinger:", err) end
+                    else
+                        warn("[BSSA] Stinger: UseItem unavailable")
+                    end
+                end
+                status.Text = "Stinger: next request in " .. math.max(0, math.ceil(nextStinger - now)) .. "s"
+            else
+                status.Text = "Stinger: Off"
+            end
+            task.wait(0.1)
+        end
+    end)
 end
 
 local openDropdowns = {}
